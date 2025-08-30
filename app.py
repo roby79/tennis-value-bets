@@ -65,24 +65,23 @@ with tab1:
         match_data = []
         
         for m in matches_today:
-            # Prendi stats giocatori
-            # Ottieni l'id dal nome
-p1_id = db.get_player_by_name(m['player1_name'])
-p2_id = db.get_player_by_name(m['player2_name'])
+            # Ottieni gli ID partendo dai nomi
+            p1_id = db.get_player_by_name(m['player1_name'])
+            p2_id = db.get_player_by_name(m['player2_name'])
 
-p1_stats = db.get_player_stats(p1_id) if p1_id else None
-p2_stats = db.get_player_stats(p2_id) if p2_id else None
+            p1_stats = db.get_player_stats(p1_id) if p1_id else None
+            p2_stats = db.get_player_stats(p2_id) if p2_id else None
             
             # Calcola probabilità basata su ELO
             if p1_stats and p2_stats:
-                p1_elo = p1_stats['elo_rating']
-                p2_elo = p2_stats['elo_rating']
+                p1_elo = p1_stats.get('elo_rating', 1500)
+                p2_elo = p2_stats.get('elo_rating', 1500)
                 prob_p1 = 1 / (1 + 10 ** ((p2_elo - p1_elo) / 400))
                 prob_p2 = 1 - prob_p1
             else:
                 prob_p1 = prob_p2 = 0.5
             
-            # Recupera un mercato match odds
+            # Recupera quote mercato (MATCH ODDS)
             conn = db._connect()
             cur = conn.execute("""
                 SELECT r.runner_name, p.back_price
@@ -102,7 +101,7 @@ p2_stats = db.get_player_stats(p2_id) if p2_id else None
             else:
                 odds_p1 = odds_p2 = None
             
-            # Calcola Expected Value
+            # Calcola EV (expected value)
             ev_p1 = (prob_p1 * odds_p1 - 1) if odds_p1 else None
             ev_p2 = (prob_p2 * odds_p2 - 1) if odds_p2 else None
             
@@ -113,10 +112,10 @@ p2_stats = db.get_player_stats(p2_id) if p2_id else None
                 "Giocatore 2": m['player2_name'],
                 "Quota 1": odds_p1,
                 "Quota 2": odds_p2,
-                "Prob 1": round(prob_p1*100,1),
-                "Prob 2": round(prob_p2*100,1),
-                "EV 1": round(ev_p1*100,1) if ev_p1 else None,
-                "EV 2": round(ev_p2*100,1) if ev_p2 else None,
+                "Prob 1": round(prob_p1*100, 1),
+                "Prob 2": round(prob_p2*100, 1),
+                "EV 1": round(ev_p1*100, 1) if ev_p1 else None,
+                "EV 2": round(ev_p2*100, 1) if ev_p2 else None,
             })
         
         st.dataframe(match_data, use_container_width=True)

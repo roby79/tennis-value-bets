@@ -111,24 +111,24 @@ with tab2:
         # ELO distribution
         st.subheader("Distribuzione ELO")
         fig_elo = px.histogram(df_players, x='elo_rating', nbins=15, 
-                              title="Distribuzione Rating ELO")
+                               title="Distribuzione Rating ELO")
         st.plotly_chart(fig_elo, use_container_width=True)
         
-       # Top players by ELO
-st.subheader("Top Giocatori per ELO")
-top_players = df_players.nlargest(8, 'elo_rating')
-
-fig_top = px.bar(top_players, x='name', y='elo_rating',
-                 title="Top Giocatori per Rating ELO")
-fig_top.update_layout(xaxis_tickangle=45)
-st.plotly_chart(fig_top, use_container_width=True)
-
-# Tabella Giocatori
-st.subheader("Tabella Giocatori")
-st.dataframe(
-    df_players[['name', 'elo_rating', 'ranking', 'wins', 'losses']].round(0),
-    use_container_width=True
-)
+        # Top players by ELO
+        st.subheader("Top Giocatori per ELO")
+        top_players = df_players.nlargest(8, 'elo_rating')
+        
+        fig_top = px.bar(top_players, x='name', y='elo_rating',
+                         title="Top Giocatori per Rating ELO")
+        fig_top.update_layout(xaxis_tickangle=45)
+        st.plotly_chart(fig_top, use_container_width=True)
+        
+        # Players table
+        st.subheader("Tabella Giocatori")
+        st.dataframe(
+            df_players[['name', 'elo_rating', 'ranking', 'wins', 'losses']].round(0),
+            use_container_width=True
+        )
     else:
         st.warning("Nessun giocatore trovato nel database.")
 

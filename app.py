@@ -66,8 +66,12 @@ with tab1:
         
         for m in matches_today:
             # Prendi stats giocatori
-            p1_stats = db.get_player_stats(m['player1_id'])
-            p2_stats = db.get_player_stats(m['player2_id'])
+            # Ottieni l'id dal nome
+p1_id = db.get_player_by_name(m['player1_name'])
+p2_id = db.get_player_by_name(m['player2_name'])
+
+p1_stats = db.get_player_stats(p1_id) if p1_id else None
+p2_stats = db.get_player_stats(p2_id) if p2_id else None
             
             # Calcola probabilità basata su ELO
             if p1_stats and p2_stats:

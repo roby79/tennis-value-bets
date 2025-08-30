@@ -59,78 +59,65 @@ tab1, tab2, tab3 = st.tabs(["📅 Partite Oggi", "📊 Statistiche Giocatori", "
 with tab1:
     st.header("Partite di Oggi")
     
-    # Get today's matches
-    matches = db.get_today_matches()
+    matches_today = db.get_today_matches()
     
-    if not matches:
+    if matches_today:
+        match_data = []
+        
+        for m in matches_today:
+            # Prendi stats giocatori
+            p1_stats = db.get_player_stats(m['player1_id'])
+            p2_stats = db.get_player_stats(m['player2_id'])
+            
+            # Calcola probabilità basata su ELO
+            if p1_stats and p2_stats:
+                p1_elo = p1_stats['elo_rating']
+                p2_elo = p2_stats['elo_rating']
+                prob_p1 = 1 / (1 + 10 ** ((p2_elo - p1_elo) / 400))
+                prob_p2 = 1 - prob_p1
+            else:
+                prob_p1 = prob_p2 = 0.5
+            
+            # Recupera un mercato match odds
+            conn = db._connect()
+            cur = conn.execute("""
+                SELECT r.runner_name, p.back_price
+                FROM runners r
+                JOIN markets mkt ON r.market_id = mkt.id
+                JOIN prices p ON r.id = p.runner_id
+                WHERE mkt.match_id = ?
+                ORDER BY p.timestamp DESC
+                LIMIT 2
+            """, (m['id'],))
+            odds = cur.fetchall()
+            conn.close()
+            
+            if len(odds) == 2:
+                odds_p1 = odds[0][1]
+                odds_p2 = odds[1][1]
+            else:
+                odds_p1 = odds_p2 = None
+            
+            # Calcola Expected Value
+            ev_p1 = (prob_p1 * odds_p1 - 1) if odds_p1 else None
+            ev_p2 = (prob_p2 * odds_p2 - 1) if odds_p2 else None
+            
+            match_data.append({
+                "Ora": m['match_time'],
+                "Torneo": m['tournament_name'],
+                "Giocatore 1": m['player1_name'],
+                "Giocatore 2": m['player2_name'],
+                "Quota 1": odds_p1,
+                "Quota 2": odds_p2,
+                "Prob 1": round(prob_p1*100,1),
+                "Prob 2": round(prob_p2*100,1),
+                "EV 1": round(ev_p1*100,1) if ev_p1 else None,
+                "EV 2": round(ev_p2*100,1) if ev_p2 else None,
+            })
+        
+        st.dataframe(match_data, use_container_width=True)
+    else:
         st.warning("Nessuna partita trovata per oggi.")
-        st.info("💡 Esegui `python etl_today.py` per importare nuovi dati.")
-    else:
-        st.success(f"Trovate {len(matches)} partite per oggi!")
-        
-        for match in matches:
-            player1 = match['player1_name']
-            player2 = match['player2_name']
-            tournament = match['tournament_name']
-            
-            col1, col2, col3 = st.columns([3, 1, 1])
-            
-            with col1:
-                st.subheader(f"{player1} vs {player2}")
-                st.caption(f"🏆 {tournament} • {match['match_time']}")
-            
-            with col2:
-                # Mock odds per demo
-                odds1 = round(np.random.uniform(1.5, 3.0), 2)
-                odds2 = round(np.random.uniform(1.5, 3.0), 2)
-                st.metric("Quote Mock", f"{odds1} / {odds2}")
-            
-            with col3:
-                # Mock EV per demo
-                ev1 = round(np.random.uniform(-0.1, 0.2), 3)
-                ev2 = round(np.random.uniform(-0.1, 0.2), 3)
-                st.metric("EV Mock", f"{ev1:+.3f} / {ev2:+.3f}")
-                
-                if ev1 > 0.05 or ev2 > 0.05:
-                    st.success("🎯 VALUE BET!")
-                else:
-                    st.info("📊 Normale")
-            
-            st.divider()
-
-with tab2:
-    st.header("Statistiche Giocatori")
-    
-    # Get all players with stats
-    players = db.get_all_players_with_stats()
-    
-    if players:
-        # Create DataFrame
-        df_players = pd.DataFrame(players)
-        
-        # ELO distribution
-        st.subheader("Distribuzione ELO")
-        fig_elo = px.histogram(df_players, x='elo_rating', nbins=15, 
-                               title="Distribuzione Rating ELO")
-        st.plotly_chart(fig_elo, use_container_width=True)
-        
-        # Top players by ELO
-        st.subheader("Top Giocatori per ELO")
-        top_players = df_players.nlargest(8, 'elo_rating')
-        
-        fig_top = px.bar(top_players, x='name', y='elo_rating',
-                         title="Top Giocatori per Rating ELO")
-        fig_top.update_layout(xaxis_tickangle=45)
-        st.plotly_chart(fig_top, use_container_width=True)
-        
-        # Players table
-        st.subheader("Tabella Giocatori")
-        st.dataframe(
-            df_players[['name', 'elo_rating', 'ranking', 'wins', 'losses']].round(0),
-            use_container_width=True
-        )
-    else:
-        st.warning("Nessun giocatore trovato nel database.")
 
 with tab3:
     st.header("💰 Info Progetto")

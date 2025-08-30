@@ -1,0 +1,138 @@
+import os
+import sqlite3
+from datetime import datetime, timedelta
+import random
+
+# Cartelle
+os.makedirs("data", exist_ok=True)
+
+# ==============================
+# requirements.txt
+# ==============================
+requirements = """streamlit
+pandas
+numpy
+plotly
+requests
+python-dotenv
+sqlalchemy
+"""
+open("requirements.txt", "w").write(requirements)
+
+# ==============================
+# .env.example
+# ==============================
+env_example = """BETFAIR_APP_KEY=your_betfair_app_key_here
+BETFAIR_USERNAME=your_betfair_username
+BETFAIR_PASSWORD=your_betfair_password
+
+DATABASE_URL=sqlite:///data/tennis.db
+"""
+open(".env.example", "w").write(env_example)
+
+# ==============================
+# app.py (mini dashboard demo)
+# ==============================
+app_code = """import streamlit as st
+import sqlite3
+import pandas as pd
+
+st.set_page_config(page_title="🎾 Tennis Value Bets", layout="wide")
+st.title("🎾 Tennis Value Bets Dashboard")
+
+# Connessione DB
+conn = sqlite3.connect("data/tennis.db")
+df_matches = pd.read_sql_query("SELECT * FROM matches", conn)
+df_players = pd.read_sql_query("SELECT * FROM players", conn)
+conn.close()
+
+if df_matches.empty:
+    st.warning("Nessuna partita trovata nel DB.")
+else:
+    st.subheader("Partite di oggi")
+    st.dataframe(df_matches)
+
+st.subheader("Giocatori")
+st.dataframe(df_players)
+"""
+open("app.py", "w").write(app_code)
+
+# ==============================
+# db.py (minimal DB manager)
+# ==============================
+db_code = """import sqlite3
+
+class DatabaseManager:
+    def __init__(self, db_path="data/tennis.db"):
+        self.db_path = db_path
+        self.init_db()
+
+    def init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript('''
+                CREATE TABLE IF NOT EXISTS players (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    country TEXT,
+                    elo_rating REAL,
+                    ranking INTEGER,
+                    wins INTEGER,
+                    losses INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS matches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tournament TEXT,
+                    player1 TEXT,
+                    player2 TEXT,
+                    match_time TEXT,
+                    odds1 REAL,
+                    odds2 REAL
+                );
+            ''')
+            conn.commit()
+"""
+open("db.py", "w").write(db_code)
+
+# ==============================
+# Popoliamo DB con dati mock
+# ==============================
+db_path = "data/tennis.db"
+
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+players = [
+    ("Novak Djokovic", "SRB", 2100, 1, 45, 8),
+    ("Carlos Alcaraz", "ESP", 2080, 2, 42, 10),
+    ("Jannik Sinner", "ITA", 2050, 3, 38, 12),
+    ("Iga Swiatek", "POL", 2080, 1, 48, 7),
+    ("Aryna Sabalenka", "BLR", 2040, 2, 40, 12),
+    ("Coco Gauff", "USA", 2000, 3, 35, 15)
+]
+
+cur.executemany(
+    "INSERT INTO players (name, country, elo_rating, ranking, wins, losses) VALUES (?, ?, ?, ?, ?, ?)",
+    players
+)
+
+today = datetime.now()
+matches = [
+    ("Australian Open", "Novak Djokovic", "Carlos Alcaraz", (today+timedelta(hours=2)).isoformat(), 1.8, 2.0),
+    ("Australian Open", "Jannik Sinner", "Iga Swiatek", (today+timedelta(hours=5)).isoformat(), 2.1, 1.7),
+    ("WTA Finals", "Aryna Sabalenka", "Coco Gauff", (today+timedelta(hours=8)).isoformat(), 1.9, 1.9)
+]
+
+cur.executemany(
+    "INSERT INTO matches (tournament, player1, player2, match_time, odds1, odds2) VALUES (?, ?, ?, ?, ?, ?)",
+    matches
+)
+
+conn.commit()
+conn.close()
+
+print("✅ Progetto creato! Ora puoi lanciare:")
+print("   1) python -m venv venv && source venv/bin/activate")
+print("   2) pip install -r requirements.txt")
+print("   3) streamlit run app.py")
+
+

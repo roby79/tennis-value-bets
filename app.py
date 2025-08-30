@@ -115,13 +115,13 @@ with tab2:
         st.plotly_chart(fig_elo, use_container_width=True)
         
         # Top players by ELO
-        st.subheader("Top Giocatori per ELO")
-        top_players = df_players.nlargest(8, 'elo_rating')
-        
-        fig_top = px.bar(top_players, x='name', y='elo_rating',
-                        title="Top Giocatori per Rating ELO")
-        fig_top.update_xaxis(tickangle=45)
-        st.plotly_chart(fig_top, use_container_width=True)
+st.subheader("Top Giocatori per ELO")
+top_players = df_players.nlargest(8, 'elo_rating')
+
+fig_top = px.bar(top_players, x='name', y='elo_rating',
+                 title="Top Giocatori per Rating ELO")
+fig_top.update_layout(xaxis_tickangle=45)  # FIX qui
+st.plotly_chart(fig_top, use_container_width=True)
         
         # Players table
         st.subheader("Tabella Giocatori")

@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, timedelta
+from typing import Optional, List, Dict
 
 class DatabaseManager:
     def __init__(self, db_path="data/tennis.db"):

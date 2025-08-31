@@ -10,9 +10,6 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
-try:
-
-
     def init_database(self):
         with self._connect() as conn:
             conn.executescript("""

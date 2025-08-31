@@ -1,7 +1,14 @@
 import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
+import streamlit as st
 
+try:
+    from db import DatabaseManager
+except Exception as e:
+    st.error("Errore durante l'import di db.py")
+    st.exception(e)  # mostra stacktrace completo
+    st.stop()
 class DatabaseManager:
     def __init__(self, db_path: str = "data/tennis.db"):
         self.db_path = db_path

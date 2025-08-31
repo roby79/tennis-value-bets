@@ -5,7 +5,41 @@ import numpy as np
 from datetime import datetime
 import plotly.express as px
 from db import DatabaseManager
+# Inizializza il database
+db = DatabaseManager()
 
+# --- Sezione gestione DB e mock data ---
+import pandas as pd
+
+# 🔹 Sidebar: pulsante per dati demo
+if st.sidebar.button("Popola DB con mock data"):
+    db.populate_mock_data()
+    st.success("DB popolato con dati di esempio ✅")
+
+# 🔹 Mostra tabella giocatori
+st.subheader("📊 Giocatori nel database (ordinati per Elo)")
+
+players = db.get_all_players_with_stats()
+if players:
+    df_players = pd.DataFrame(players)
+    # Ordino per elo_rating
+    df_players = df_players.sort_values("elo_rating", ascending=False)
+
+    # Mostro tabella "pulita"
+    st.dataframe(df_players[["name", "country", "elo_rating", "ranking", "wins", "losses"]].head(15))
+
+    # 🔹 Grafico Plotly: Top 10 Elo
+    top10 = df_players.head(10)
+    fig = px.bar(
+        top10,
+        x="name",
+        y="elo_rating",
+        color="country",
+        title="🏆 Top 10 Giocatori per Elo Rating",
+        text="elo_rating"
+    )
+    fig.update_traces(texttemplate='%{text:.0f}', textposition="outside")
+    fig.update_layout
 # Page config
 st.set_page_config(
     page_title="Tennis Value Bets",

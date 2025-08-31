@@ -75,30 +75,54 @@ if st.sidebar.button("Popola DB con mock data"):
     db.populate_mock_data()
     st.success("DB popolato con dati di esempio ✅")
 
-# 🔹 Mostra tabella giocatori
-st.subheader("📊 Giocatori nel database (ordinati per Elo)")
-
+# --- Filtri giocatori ---
 players = db.get_all_players_with_stats()
+
 if players:
     df_players = pd.DataFrame(players)
     df_players = df_players.sort_values("elo_rating", ascending=False)
-
-    # Mostro tabella "pulita"
-    st.dataframe(df_players[["name", "country", "elo_rating", "ranking", "wins", "losses"]].head(15))
-
-    # 🔹 Grafico Plotly: Top 10 Elo
-    top10 = df_players.head(10)
-    fig = px.bar(
-        top10,
-        x="name",
-        y="elo_rating",
-        color="country",
-        title="🏆 Top 10 Giocatori per Elo Rating",
-        text="elo_rating"
-    )
-    fig.update_traces(texttemplate='%{text:.0f}', textposition="outside")
-    fig.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # 🔧 Filtri nella sidebar
+    nations = sorted(df_players["country"].dropna().unique())
+    selected_nations = st.sidebar.multiselect("🌍 Seleziona Paesi", nations, default=nations)
+    
+    min_elo = int(df_players["elo_rating"].min())
+    max_elo = int(df_players["elo_rating"].max())
+    elo_min = st.sidebar.slider("📈 Elo minimo", min_elo, max_elo, min_elo)
+    
+    min_rank = int(df_players["ranking"].min())
+    max_rank = int(df_players["ranking"].max())
+    rank_max = st.sidebar.slider("🏅 Ranking massimo", min_rank, max_rank, max_rank)
+    
+    # Applico i filtri
+    df_filtered = df_players[
+        (df_players["country"].isin(selected_nations)) &
+        (df_players["elo_rating"] >= elo_min) &
+        (df_players["ranking"] <= rank_max)
+    ]
+    
+    # 🔹 Mostra risultati filtrati
+    st.subheader(f"📊 Giocatori trovati: {len(df_filtered)}")
+    
+    if not df_filtered.empty:
+        # Tabella
+        st.dataframe(df_filtered[["name", "country", "elo_rating", "ranking", "wins", "losses"]].head(15))
+        
+        # 🔹 Grafico Plotly: Top 10 Elo filtrati
+        top10 = df_filtered.head(10)
+        fig = px.bar(
+            top10,
+            x="name",
+            y="elo_rating",
+            color="country",
+            title="🏆 Top 10 Giocatori per Elo Rating (filtrati)",
+            text="elo_rating"
+        )
+        fig.update_traces(texttemplate='%{text:.0f}', textposition="outside")
+        fig.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("⚠️ Nessun giocatore trovato con i filtri attuali.")
 
 else:
     st.info("ℹ️ Nessun giocatore presente nel database. Popola il DB dal menu a sinistra.")

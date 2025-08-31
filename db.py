@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 class DatabaseManager:
     def __init__(self, db_path="data/tennis.db"):
+        import os
+        os.makedirs("data", exist_ok=True)   # <-- CREA LA CARTELLA SE NON ESISTE
         self.db_path = db_path
         self.init_database()
 

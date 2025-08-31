@@ -39,8 +39,7 @@ if players:
         text="elo_rating"
     )
     fig.update_traces(texttemplate='%{text:.0f}', textposition="outside")
-    fig.update_layout
-# Page config
+fig.update_layout(xaxis_tickangle=-45)# Page config
 st.set_page_config(
     page_title="Tennis Value Bets",
     page_icon="🎾",

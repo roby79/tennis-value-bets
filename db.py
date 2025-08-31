@@ -330,4 +330,11 @@ class DatabaseManager:
             self.insert_player_stats(
                 player_id, elo, ranking, wins, losses,
                 surface_win_pct_hard=random.uniform(0.5, 0.8),
-                surface_win_pct_clay=random.uniform
+                surface_win_pct_clay=random.uniform(0.4, 0.75),
+                surface_win_pct_grass=random.uniform(0.45, 0.7),
+                tb_win_pct=random.uniform(0.4, 0.7),
+                avg_games_won=random.uniform(5.5, 7.2),
+                avg_games_lost=random.uniform(4.8, 6.5)
+            )
+        
+        print("✅ Mock data populated successfully!")

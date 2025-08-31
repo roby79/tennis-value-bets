@@ -1,7 +1,7 @@
 import sqlite3
 import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict
-
 class DatabaseManager:
     def __init__(self, db_path="data/tennis.db"):
         self.db_path = db_path

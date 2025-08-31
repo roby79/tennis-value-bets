@@ -60,7 +60,7 @@ db = DatabaseManager()
 st.title("🎾 Tennis Value Bets Dashboard")
 st.markdown("**Analisi ATP/WTA con quote Betfair e detection value bets**")
 
-# 🔧 Sidebar filtri
+# 🔧 Sidebar azioni
 st.sidebar.header("🔧 Azioni")
 
 # Pulsante popola giocatori
@@ -76,8 +76,10 @@ if st.sidebar.button("Genera partite mock 🎲"):
     except Exception as e:
         st.error(f"Errore nel generare partite mock: {e}")
 
-# --- Filtri giocatori ---
-st.sidebar.header("🔧 Filtri giocatori")
+# -------------------------
+# 👥 Filtri Giocatori
+# -------------------------
+st.sidebar.header("Filtri giocatori")
 
 players = db.get_all_players_with_stats()
 if players:
@@ -95,7 +97,7 @@ if players:
     max_rank = int(df_players["ranking"].max())
     rank_max = st.sidebar.slider("🏅 Ranking massimo", min_rank, max_rank, max_rank)
 
-    # Applica i filtri
+    # Applica filtri
     df_filtered = df_players[
         (df_players["country"].isin(selected_nations)) &
         (df_players["elo_rating"] >= elo_min) &
@@ -108,7 +110,7 @@ if players:
         # Tabella
         st.dataframe(df_filtered[["name", "country", "elo_rating", "ranking", "wins", "losses"]].head(15))
 
-        # Grafico Plotly
+        # Grafico
         top10 = df_filtered.head(10)
         fig = px.bar(
             top10,
@@ -122,13 +124,12 @@ if players:
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
 
-        # 👤 Scheda Giocatore Dettagliata
+        # 👤 Scheda Giocatore
         player_names = df_filtered["name"].tolist()
         selected_player = st.selectbox("👤 Vedi scheda giocatore", ["—"] + player_names)
 
         if selected_player != "—":
             player_data = df_filtered[df_filtered["name"] == selected_player].iloc[0]
-
             st.markdown(f"### 👤 {player_data['name']} ({player_data['country']})")
             col1, col2 = st.columns(2)
             with col1:
@@ -153,18 +154,48 @@ else:
 
 st.divider()
 
-# 📅 Partite di oggi
+# -------------------------
+# 🎾 Partite di Oggi + Value Bets
+# -------------------------
 st.subheader("📅 Partite Oggi")
+
 matches = db.get_today_matches()
 if matches:
     df_matches = pd.DataFrame(matches)
-    st.dataframe(df_matches[["tournament_name", "player1_name", "player2_name", "match_time", "round", "odds_p1", "odds_p2"]])
+
+    # Calcolo probabilità stimata da Elo (semplice modello)
+    def win_prob(elo1, elo2):
+        return 1 / (1 + 10 ** ((elo2 - elo1) / 400))
+
+    # Join con elo
+    elo_map = {p["name"]: p["elo_rating"] for p in players}
+    df_matches["elo_p1"] = df_matches["player1_name"].map(elo_map)
+    df_matches["elo_p2"] = df_matches["player2_name"].map(elo_map)
+
+    df_matches["prob_p1"] = df_matches.apply(lambda r: win_prob(r["elo_p1"], r["elo_p2"]), axis=1)
+    df_matches["prob_p2"] = 1 - df_matches["prob_p1"]
+
+    df_matches["fair_odds_p1"] = (1 / df_matches["prob_p1"]).round(2)
+    df_matches["fair_odds_p2"] = (1 / df_matches["prob_p2"]).round(2)
+
+    # Value Bet check
+    df_matches["value_p1"] = df_matches["odds_p1"] > df_matches["fair_odds_p1"]
+    df_matches["value_p2"] = df_matches["odds_p2"] > df_matches["fair_odds_p2"]
+
+    st.dataframe(df_matches[[
+        "tournament_name", "player1_name", "player2_name", "round", "surface",
+        "odds_p1", "fair_odds_p1", "value_p1",
+        "odds_p2", "fair_odds_p2", "value_p2"
+    ]])
+
 else:
-    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲' per simularle.")
+    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲' nella sidebar.")
 
 st.divider()
 
+# -------------------------
 # ℹ️ Info progetto
+# -------------------------
 st.subheader("💰 Info Progetto")
 st.markdown("""
 🎾 **Tennis Value Bets** - Demo Dashboard con dati mock  

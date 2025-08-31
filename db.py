@@ -271,3 +271,56 @@ class DatabaseManager:
     def insert_price(self, runner_id: int,
                      back_price: Optional[float],
                      lay_price: Optional[float],
+                     back_size: Optional[float],
+                     lay_size: Optional[float],
+                     total_matched: Optional[float]) -> int:
+        with self._connect() as conn:
+            cur = conn.execute("""
+                INSERT INTO prices (runner_id, back_price, lay_price, back_size, lay_size, total_matched, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (runner_id, back_price, lay_price, back_size, lay_size, total_matched))
+            conn.commit()
+            return cur.lastrowid
+
+    def get_all_players_with_stats(self) -> List[Dict]:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT p.name, p.country,
+                       ps.elo_rating, ps.ranking, ps.wins, ps.losses,
+                       ps.surface_win_pct_hard, ps.surface_win_pct_clay, ps.surface_win_pct_grass,
+                       ps.tb_win_pct, ps.avg_games_won, ps.avg_games_lost
+                FROM players p
+                LEFT JOIN player_stats ps ON p.id = ps.player_id
+                ORDER BY COALESCE(ps.elo_rating, 0) DESC, p.name ASC
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def populate_mock_data(self):
+        """Popola il database con dati di esempio per testing"""
+        import random
+        
+        # Mock players
+        mock_players = [
+            ("Novak Djokovic", "SRB"), ("Rafael Nadal", "ESP"), ("Roger Federer", "SUI"),
+            ("Daniil Medvedev", "RUS"), ("Alexander Zverev", "GER"), ("Stefanos Tsitsipas", "GRE"),
+            ("Andrey Rublev", "RUS"), ("Matteo Berrettini", "ITA"), ("Hubert Hurkacz", "POL"),
+            ("Jannik Sinner", "ITA"), ("Iga Swiatek", "POL"), ("Aryna Sabalenka", "BLR"),
+            ("Jessica Pegula", "USA"), ("Elena Rybakina", "KAZ"), ("Caroline Garcia", "FRA"),
+            ("Coco Gauff", "USA"), ("Maria Sakkari", "GRE"), ("Petra Kvitova", "CZE"),
+            ("Belinda Bencic", "SUI"), ("Karolina Pliskova", "CZE")
+        ]
+        
+        for name, country in mock_players:
+            player_id = self.insert_player(name, country)
+            
+            # Mock stats
+            elo = random.randint(1400, 2200)
+            ranking = random.randint(1, 100)
+            wins = random.randint(15, 45)
+            losses = random.randint(5, 25)
+            
+            self.insert_player_stats(
+                player_id, elo, ranking, wins, losses,
+                surface_win_pct_hard=random.uniform(0.5, 0.8),
+                surface_win_pct_clay=random.uniform

@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 🎨 Tema custom con CSS (bianco+viola stile mobile UI)
+# 🎨 Tema custom con CSS (bianco+viola)
 st.markdown(
     """
     <style>
@@ -41,6 +41,12 @@ st.markdown(
         color: #4A148C;
         font-weight: 700;
     }
+    .match-card {
+        background:#f6f6f6;
+        padding:10px;
+        border-radius:8px;
+        text-align:center;
+    }
     .stDataFrame, .stPlotlyChart, .element-container {
         background: #ffffff;
         border-radius: 12px;
@@ -63,12 +69,10 @@ st.markdown("**Analisi ATP/WTA con quote Betfair e detection value bets**")
 # 🔧 Sidebar azioni
 st.sidebar.header("🔧 Azioni")
 
-# Pulsante popola giocatori
 if st.sidebar.button("Popola DB giocatori 👥"):
     db.populate_mock_data()
     st.success("DB popolato con giocatori demo ✅")
 
-# Pulsante genera match mock
 if st.sidebar.button("Genera partite mock 🎲"):
     try:
         db.populate_mock_matches()
@@ -97,7 +101,6 @@ if players:
     max_rank = int(df_players["ranking"].max())
     rank_max = st.sidebar.slider("🏅 Ranking massimo", min_rank, max_rank, max_rank)
 
-    # Applica filtri
     df_filtered = df_players[
         (df_players["country"].isin(selected_nations)) &
         (df_players["elo_rating"] >= elo_min) &
@@ -107,10 +110,8 @@ if players:
     st.subheader(f"📊 Giocatori trovati: {len(df_filtered)}")
 
     if not df_filtered.empty:
-        # Tabella
         st.dataframe(df_filtered[["name", "country", "elo_rating", "ranking", "wins", "losses"]].head(15))
 
-        # Grafico
         top10 = df_filtered.head(10)
         fig = px.bar(
             top10,
@@ -124,7 +125,7 @@ if players:
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
 
-        # 👤 Scheda Giocatore
+        # 👤 Scheda giocatore
         player_names = df_filtered["name"].tolist()
         selected_player = st.selectbox("👤 Vedi scheda giocatore", ["—"] + player_names)
 
@@ -139,7 +140,6 @@ if players:
                 st.metric("Vittorie", f"{player_data['wins']}")
                 st.metric("Sconfitte", f"{player_data['losses']}")
 
-            # Trend Elo mock
             fig_trend = px.line(
                 x=list(range(10)),
                 y=np.random.randint(1600, 2000, 10),
@@ -155,7 +155,7 @@ else:
 st.divider()
 
 # -------------------------
-# 🎾 Partite di Oggi + Value Bets
+# 🎾 Partite di Oggi (card layout con Value Bets)
 # -------------------------
 st.subheader("📅 Partite Oggi")
 
@@ -163,11 +163,9 @@ matches = db.get_today_matches()
 if matches:
     df_matches = pd.DataFrame(matches)
 
-    # Calcolo probabilità stimata da Elo (semplice modello)
     def win_prob(elo1, elo2):
         return 1 / (1 + 10 ** ((elo2 - elo1) / 400))
 
-    # Join con elo
     elo_map = {p["name"]: p["elo_rating"] for p in players}
     df_matches["elo_p1"] = df_matches["player1_name"].map(elo_map)
     df_matches["elo_p2"] = df_matches["player2_name"].map(elo_map)
@@ -178,18 +176,44 @@ if matches:
     df_matches["fair_odds_p1"] = (1 / df_matches["prob_p1"]).round(2)
     df_matches["fair_odds_p2"] = (1 / df_matches["prob_p2"]).round(2)
 
-    # Value Bet check
     df_matches["value_p1"] = df_matches["odds_p1"] > df_matches["fair_odds_p1"]
     df_matches["value_p2"] = df_matches["odds_p2"] > df_matches["fair_odds_p2"]
 
-    st.dataframe(df_matches[[
-        "tournament_name", "player1_name", "player2_name", "round", "surface",
-        "odds_p1", "fair_odds_p1", "value_p1",
-        "odds_p2", "fair_odds_p2", "value_p2"
-    ]])
+    for _, row in df_matches.iterrows():
+        col1, col2, col3 = st.columns([4, 2, 4])
+
+        with col1:
+            st.markdown(f"""
+            <div class="match-card">
+                <b>{row['player1_name']}</b><br>
+                Elo: {row['elo_p1']}<br>
+                Odds: <span style="color:{'green' if row['value_p1'] else 'black'}">{row['odds_p1']}</span><br>
+                Fair: {row['fair_odds_p1']}
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col2:
+            st.markdown(f"""
+            <div style="text-align:center; font-size:22px;">
+                <b>VS</b><br>
+                <span style="font-size:14px;">{row['tournament_name']} - {row['round']} ({row['surface']})</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col3:
+            st.markdown(f"""
+            <div class="match-card">
+                <b>{row['player2_name']}</b><br>
+                Elo: {row['elo_p2']}<br>
+                Odds: <span style="color:{'green' if row['value_p2'] else 'black'}">{row['odds_p2']}</span><br>
+                Fair: {row['fair_odds_p2']}
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
 
 else:
-    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲' nella sidebar.")
+    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲'.")
 
 st.divider()
 

@@ -1,43 +1,66 @@
 import streamlit as st
-import pandas as pd
-import sqlite3
 import numpy as np
-from datetime import datetime
-import plotly.express as px
-from db import DatabaseManager
-# Inizializza il database
-db = DatabaseManager()
-
-# --- Sezione gestione DB e mock data ---
 import pandas as pd
+import plotly.express as px
+from datetime import datetime
 
-# 🔹 Sidebar: pulsante per dati demo
-if st.sidebar.button("Popola DB con mock data"):
-    db.populate_mock_data()
-    st.success("DB popolato con dati di esempio ✅")
+from db import DatabaseManager   # import della classe
 
-# 🔹 Mostra tabella giocatori
-st.subheader("📊 Giocatori nel database (ordinati per Elo)")
+# ⚙️ Configurazione pagina
+st.set_page_config(
+    page_title="Tennis Value Bets",
+    page_icon="🎾",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-players = db.get_all_players_with_stats()
-if players:
-    df_players = pd.DataFrame(players)
-    # Ordino per elo_rating
-    df_players = df_players.sort_values("elo_rating", ascending=False)
+# 🎨 Tema custom con CSS (bianco+viola stile mobile UI)
+st.markdown(
+    """
+    <style>
+    /* Sidebar viola */
+    [data-testid="stSidebar"] {
+        background-color: #7B1FA2 !important;
+    }
+    [data-testid="stSidebar"] * {
+        color: white !important;
+    }
 
-    # Mostro tabella "pulita"
-    st.dataframe(df_players[["name", "country", "elo_rating", "ranking", "wins", "losses"]].head(15))
+    /* Bottoni */
+    .stButton>button {
+        background-color: #7B1FA2;
+        color: white;
+        border-radius: 10px;
+        padding: 0.6em 1.2em;
+        font-weight: bold;
+        border: none;
+    }
+    .stButton>button:hover {
+        background-color: #9C27B0;
+        color: #fff;
+    }
 
-    # 🔹 Grafico Plotly: Top 10 Elo
-    top10 = df_players.head(10)
-    fig = px.bar(
-        top10,
-        x="name",
-        y="elo_rating",
-        color="country",
-        title="🏆 Top 10 Giocatori per Elo Rating",
-        text="elo_rating"
-    )
+    /* Titoli */
+    h1, h2, h3, h4 {
+        color: #4A148C;
+        font-weight: 700;
+    }
+
+    /* Blocchi card */
+    .stDataFrame, .stPlotlyChart, .element-container {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 1em;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+        margin-bottom: 1.5em;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# Inizializza DB
+db = DatabaseManager()
     fig.update_traces(texttemplate='%{text:.0f}', textposition="outside")
 fig.update_layout(xaxis_tickangle=-45)# Page config
 st.set_page_config(

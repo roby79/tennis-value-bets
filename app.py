@@ -54,6 +54,16 @@ st.markdown(
         box-shadow: 0 2px 6px rgba(0,0,0,0.08);
         margin-bottom: 1.5em;
     }
+    .badge {
+        display:inline-block;
+        padding:2px 8px;
+        border-radius:12px;
+        font-size:12px;
+        font-weight:700;
+        color:#fff;
+        background:#2e7d32;
+        margin-left:6px;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -155,7 +165,7 @@ else:
 st.divider()
 
 # -------------------------
-# 🎾 Partite di Oggi (card layout + grafico quote)
+# 🎾 Partite di Oggi (card layout + filtri + grafico quote)
 # -------------------------
 st.subheader("📅 Partite Oggi")
 
@@ -163,12 +173,17 @@ matches = db.get_today_matches()
 if matches:
     df_matches = pd.DataFrame(matches)
 
+    # Probabilità stimate da Elo
     def win_prob(elo1, elo2):
         return 1 / (1 + 10 ** ((elo2 - elo1) / 400))
 
     elo_map = {p["name"]: p["elo_rating"] for p in players}
     df_matches["elo_p1"] = df_matches["player1_name"].map(elo_map)
     df_matches["elo_p2"] = df_matches["player2_name"].map(elo_map)
+
+    # Gestione possibili NaN Elo
+    df_matches["elo_p1"] = df_matches["elo_p1"].fillna(df_players["elo_rating"].median() if players else 1800)
+    df_matches["elo_p2"] = df_matches["elo_p2"].fillna(df_players["elo_rating"].median() if players else 1800)
 
     df_matches["prob_p1"] = df_matches.apply(lambda r: win_prob(r["elo_p1"], r["elo_p2"]), axis=1)
     df_matches["prob_p2"] = 1 - df_matches["prob_p1"]
@@ -179,50 +194,109 @@ if matches:
     df_matches["value_p1"] = df_matches["odds_p1"] > df_matches["fair_odds_p1"]
     df_matches["value_p2"] = df_matches["odds_p2"] > df_matches["fair_odds_p2"]
 
-    for _, row in df_matches.iterrows():
-        col1, col2, col3 = st.columns([4, 2, 4])
+    # Edge come scostamento percentuale vs fair odds
+    df_matches["edge_p1"] = (df_matches["odds_p1"] / df_matches["fair_odds_p1"] - 1).round(3)
+    df_matches["edge_p2"] = (df_matches["odds_p2"] / df_matches["fair_odds_p2"] - 1).round(3)
 
-        with col1:
-            st.markdown(f"""
-            <div class="match-card">
-                <b>{row['player1_name']}</b><br>
-                Elo: {row['elo_p1']}<br>
-                Odds: <span style="color:{'green' if row['value_p1'] else 'black'}">{row['odds_p1']}</span><br>
-                Fair: {row['fair_odds_p1']}
-            </div>
-            """, unsafe_allow_html=True)
+    # ---- Filtri partite (sidebar)
+    st.sidebar.header("Filtri partite")
 
-        with col2:
-            st.markdown(f"""
-            <div style="text-align:center; font-size:22px;">
-                <b>VS</b><br>
-                <span style="font-size:14px;">{row['tournament_name']} - {row['round']} ({row['surface']})</span>
-            </div>
-            """, unsafe_allow_html=True)
+    tournaments = sorted(df_matches["tournament_name"].dropna().unique().tolist())
+    selected_tournaments = st.sidebar.multiselect("🏟️ Tornei", tournaments, default=tournaments)
 
-        with col3:
-            st.markdown(f"""
-            <div class="match-card">
-                <b>{row['player2_name']}</b><br>
-                Elo: {row['elo_p2']}<br>
-                Odds: <span style="color:{'green' if row['value_p2'] else 'black'}">{row['odds_p2']}</span><br>
-                Fair: {row['fair_odds_p2']}
-            </div>
-            """, unsafe_allow_html=True)
+    surfaces = sorted(df_matches["surface"].dropna().unique().tolist())
+    selected_surfaces = st.sidebar.multiselect("🟦 Superfici", surfaces, default=surfaces)
 
-        # 🔹 Grafico quote vs fair
-        fig_match = px.bar(
-            x=["Odds P1", "Fair P1", "Odds P2", "Fair P2"],
-            y=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']],
-            color=["Real", "Fair", "Real", "Fair"],
-            title=f"Confronto Quote - {row['player1_name']} vs {row['player2_name']}",
-            text=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']]
-        )
-        fig_match.update_traces(texttemplate='%{text:.2f}', textposition="outside")
-        fig_match.update_layout(yaxis_title="Quota", xaxis_title="", showlegend=False, height=400)
-        st.plotly_chart(fig_match, use_container_width=True)
+    only_value = st.sidebar.checkbox("🔥 Solo Value Bets", value=False)
+    min_edge = st.sidebar.slider("📊 Edge minimo (%)", 0, 50, 5)  # percento
+    min_edge_dec = min_edge / 100.0
 
-        st.markdown("---")
+    # Applica filtri
+    dfm = df_matches[
+        (df_matches["tournament_name"].isin(selected_tournaments)) &
+        (df_matches["surface"].isin(selected_surfaces))
+    ].copy()
+
+    if only_value:
+        dfm = dfm[(dfm["value_p1"]) | (dfm["value_p2"])]
+
+    # Edge soglia su almeno uno dei due lati
+    dfm = dfm[(dfm["edge_p1"] >= min_edge_dec) | (dfm["edge_p2"] >= min_edge_dec)]
+
+    st.caption(f"Partite dopo filtri: {len(dfm)}")
+
+    # Download CSV value bets
+    vb = dfm[
+        (dfm["edge_p1"] >= min_edge_dec) | (dfm["edge_p2"] >= min_edge_dec)
+    ][[
+        "tournament_name","round","surface",
+        "player1_name","odds_p1","fair_odds_p1","edge_p1",
+        "player2_name","odds_p2","fair_odds_p2","edge_p2",
+        "match_time"
+    ]].copy()
+    if not vb.empty:
+        vb_sorted = vb.sort_values(by=["edge_p1","edge_p2"], ascending=False)
+        csv = vb_sorted.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Scarica Value Bets (CSV)", data=csv, file_name="value_bets.csv", mime="text/csv")
+
+    # Render card + grafico per ciascun match
+    if dfm.empty:
+        st.info("Nessuna partita soddisfa i filtri attuali.")
+    else:
+        for _, row in dfm.iterrows():
+            col1, col2, col3 = st.columns([4, 2, 4])
+
+            with col1:
+                badge_html = '<span class="badge">VALUE</span>' if row["value_p1"] and row["edge_p1"] >= min_edge_dec else ""
+                st.markdown(f"""
+                <div class="match-card">
+                    <b>{row['player1_name']}</b> {badge_html}<br>
+                    Elo: {int(row['elo_p1'])}<br>
+                    Odds: <span style="color:{'green' if row['value_p1'] and row['edge_p1'] >= min_edge_dec else 'black'}">{row['odds_p1']}</span><br>
+                    Fair: {row['fair_odds_p1']}<br>
+                    Edge: {(row['edge_p1']*100):.1f}%
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col2:
+                when = ""
+                try:
+                    when = pd.to_datetime(row["match_time"]).strftime("%H:%M")
+                except Exception:
+                    when = str(row["match_time"])
+                st.markdown(f"""
+                <div style="text-align:center; font-size:22px;">
+                    <b>VS</b><br>
+                    <span style="font-size:14px;">{row['tournament_name']} - {row['round']} ({row['surface']})</span><br>
+                    <span style="font-size:12px;">{when}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col3:
+                badge_html2 = '<span class="badge">VALUE</span>' if row["value_p2"] and row["edge_p2"] >= min_edge_dec else ""
+                st.markdown(f"""
+                <div class="match-card">
+                    <b>{row['player2_name']}</b> {badge_html2}<br>
+                    Elo: {int(row['elo_p2'])}<br>
+                    Odds: <span style="color:{'green' if row['value_p2'] and row['edge_p2'] >= min_edge_dec else 'black'}">{row['odds_p2']}</span><br>
+                    Fair: {row['fair_odds_p2']}<br>
+                    Edge: {(row['edge_p2']*100):.1f}%
+                </div>
+                """, unsafe_allow_html=True)
+
+            # 🔹 Grafico quote vs fair
+            fig_match = px.bar(
+                x=["Odds P1", "Fair P1", "Odds P2", "Fair P2"],
+                y=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']],
+                color=["Real", "Fair", "Real", "Fair"],
+                title=f"Confronto Quote - {row['player1_name']} vs {row['player2_name']}",
+                text=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']]
+            )
+            fig_match.update_traces(texttemplate='%{text:.2f}', textposition="outside")
+            fig_match.update_layout(yaxis_title="Quota", xaxis_title="", showlegend=False, height=380)
+            st.plotly_chart(fig_match, use_container_width=True)
+
+            st.markdown("---")
 
 else:
     st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲'.")

@@ -90,6 +90,16 @@ if st.sidebar.button("Genera partite mock 🎲"):
     except Exception as e:
         st.error(f"Errore nel generare partite mock: {e}")
 
+# Fetch dati reali (Sofascore)
+if st.sidebar.button("Fetch dati reali (Sofascore) 🌍"):
+    try:
+        from etl_today import run_etl_today
+        with st.spinner("Scaricando dati reali da Sofascore..."):
+            summary = run_etl_today(verbose=False)
+        st.success(f"ETL ok: eventi={summary['events']} | aggiornati={summary['updated']} | con quote={summary['with_odds']} | skip={summary['skipped']}")
+    except Exception as e:
+        st.error(f"Errore ETL Sofascore: {e}")
+
 # -------------------------
 # 👥 Filtri Giocatori
 # -------------------------
@@ -191,12 +201,13 @@ if matches:
     df_matches["fair_odds_p1"] = (1 / df_matches["prob_p1"]).round(2)
     df_matches["fair_odds_p2"] = (1 / df_matches["prob_p2"]).round(2)
 
-    df_matches["value_p1"] = df_matches["odds_p1"] > df_matches["fair_odds_p1"]
-    df_matches["value_p2"] = df_matches["odds_p2"] > df_matches["fair_odds_p2"]
+    # Value Bet check (solo se abbiamo odds reali)
+    df_matches["value_p1"] = (df_matches["odds_p1"].notna()) & (df_matches["odds_p1"] > df_matches["fair_odds_p1"])
+    df_matches["value_p2"] = (df_matches["odds_p2"].notna()) & (df_matches["odds_p2"] > df_matches["fair_odds_p2"])
 
     # Edge come scostamento percentuale vs fair odds
-    df_matches["edge_p1"] = (df_matches["odds_p1"] / df_matches["fair_odds_p1"] - 1).round(3)
-    df_matches["edge_p2"] = (df_matches["odds_p2"] / df_matches["fair_odds_p2"] - 1).round(3)
+    df_matches["edge_p1"] = ((df_matches["odds_p1"] / df_matches["fair_odds_p1"] - 1).fillna(0)).round(3)
+    df_matches["edge_p2"] = ((df_matches["odds_p2"] / df_matches["fair_odds_p2"] - 1).fillna(0)).round(3)
 
     # ---- Filtri partite (sidebar)
     st.sidebar.header("Filtri partite")
@@ -248,11 +259,12 @@ if matches:
 
             with col1:
                 badge_html = '<span class="badge">VALUE</span>' if row["value_p1"] and row["edge_p1"] >= min_edge_dec else ""
+                odds_p1_display = f"{row['odds_p1']:.2f}" if pd.notna(row['odds_p1']) else "N/A"
                 st.markdown(f"""
                 <div class="match-card">
                     <b>{row['player1_name']}</b> {badge_html}<br>
                     Elo: {int(row['elo_p1'])}<br>
-                    Odds: <span style="color:{'green' if row['value_p1'] and row['edge_p1'] >= min_edge_dec else 'black'}">{row['odds_p1']}</span><br>
+                    Odds: <span style="color:{'green' if row['value_p1'] and row['edge_p1'] >= min_edge_dec else 'black'}">{odds_p1_display}</span><br>
                     Fair: {row['fair_odds_p1']}<br>
                     Edge: {(row['edge_p1']*100):.1f}%
                 </div>
@@ -263,7 +275,7 @@ if matches:
                 try:
                     when = pd.to_datetime(row["match_time"]).strftime("%H:%M")
                 except Exception:
-                    when = str(row["match_time"])
+                    when = str(row["match_time"]) if pd.notna(row["match_time"]) else "TBD"
                 st.markdown(f"""
                 <div style="text-align:center; font-size:22px;">
                     <b>VS</b><br>
@@ -274,32 +286,36 @@ if matches:
 
             with col3:
                 badge_html2 = '<span class="badge">VALUE</span>' if row["value_p2"] and row["edge_p2"] >= min_edge_dec else ""
+                odds_p2_display = f"{row['odds_p2']:.2f}" if pd.notna(row['odds_p2']) else "N/A"
                 st.markdown(f"""
                 <div class="match-card">
                     <b>{row['player2_name']}</b> {badge_html2}<br>
                     Elo: {int(row['elo_p2'])}<br>
-                    Odds: <span style="color:{'green' if row['value_p2'] and row['edge_p2'] >= min_edge_dec else 'black'}">{row['odds_p2']}</span><br>
+                    Odds: <span style="color:{'green' if row['value_p2'] and row['edge_p2'] >= min_edge_dec else 'black'}">{odds_p2_display}</span><br>
                     Fair: {row['fair_odds_p2']}<br>
                     Edge: {(row['edge_p2']*100):.1f}%
                 </div>
                 """, unsafe_allow_html=True)
 
-            # 🔹 Grafico quote vs fair
-            fig_match = px.bar(
-                x=["Odds P1", "Fair P1", "Odds P2", "Fair P2"],
-                y=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']],
-                color=["Real", "Fair", "Real", "Fair"],
-                title=f"Confronto Quote - {row['player1_name']} vs {row['player2_name']}",
-                text=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']]
-            )
-            fig_match.update_traces(texttemplate='%{text:.2f}', textposition="outside")
-            fig_match.update_layout(yaxis_title="Quota", xaxis_title="", showlegend=False, height=380)
-            st.plotly_chart(fig_match, use_container_width=True)
+            # 🔹 Grafico quote vs fair (solo se abbiamo almeno una quota reale)
+            if pd.notna(row['odds_p1']) or pd.notna(row['odds_p2']):
+                o1 = row['odds_p1'] if pd.notna(row['odds_p1']) else 0
+                o2 = row['odds_p2'] if pd.notna(row['odds_p2']) else 0
+                fig_match = px.bar(
+                    x=["Odds P1", "Fair P1", "Odds P2", "Fair P2"],
+                    y=[o1, row['fair_odds_p1'], o2, row['fair_odds_p2']],
+                    color=["Real", "Fair", "Real", "Fair"],
+                    title=f"Confronto Quote - {row['player1_name']} vs {row['player2_name']}",
+                    text=[o1, row['fair_odds_p1'], o2, row['fair_odds_p2']]
+                )
+                fig_match.update_traces(texttemplate='%{text:.2f}', textposition="outside")
+                fig_match.update_layout(yaxis_title="Quota", xaxis_title="", showlegend=False, height=380)
+                st.plotly_chart(fig_match, use_container_width=True)
 
             st.markdown("---")
 
 else:
-    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲'.")
+    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲' o 'Fetch dati reali 🌍'.")
 
 st.divider()
 
@@ -308,7 +324,7 @@ st.divider()
 # -------------------------
 st.subheader("💰 Info Progetto")
 st.markdown("""
-🎾 **Tennis Value Bets** - Demo Dashboard con dati mock  
-📊 Statistiche giocatori, quote Betfair e detection value bets  
-🚀 Sviluppato con Streamlit + SQLite  
+🎾 **Tennis Value Bets** - Dashboard con dati reali Sofascore  
+📊 Statistiche giocatori, quote bookmaker e detection value bets  
+🚀 Sviluppato con Streamlit + SQLite + Sofascore API  
 """)

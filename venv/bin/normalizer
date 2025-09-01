@@ -1,4 +1,4 @@
-#!/Users/robertotamburello/tennis-value-bets/venv/bin/python3
+#!/home/ubuntu/tennis-value-bets/venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

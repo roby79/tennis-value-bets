@@ -4,8 +4,139 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import os
+import logging
+from dotenv import load_dotenv
 
 from db import DatabaseManager
+from services.betfair_session import BetfairItalySession
+from services.betfair_client import BetfairItalyClient
+from config.betfair_it import TENNIS_CONFIG, ITALIAN_BETTING_RULES
+
+# Carica variabili ambiente
+load_dotenv()
+load_dotenv('.env.betfair')
+
+# Configurazione logging
+logging.basicConfig(level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO')))
+
+# Inizializzazione client Betfair (cached per performance)
+@st.cache_resource
+def init_betfair_client():
+    """Inizializza il client Betfair Italia con caching"""
+    app_key = os.getenv('BETFAIR_APP_KEY')
+    username = os.getenv('BETFAIR_USERNAME')
+    password = os.getenv('BETFAIR_PASSWORD')
+    demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
+    
+    if demo_mode or not app_key:
+        st.warning("⚠️ Modalità DEMO attiva - usando dati simulati")
+        return None
+    
+    try:
+        session = BetfairItalySession(app_key, username, password)
+        client = BetfairItalyClient(session)
+        return client
+    except Exception as e:
+        st.error(f"Errore inizializzazione Betfair: {e}")
+        return None
+
+def get_tennis_data_betfair(client):
+    """Recupera dati tennis reali da Betfair Italia"""
+    if not client:
+        return generate_mock_tennis_data()
+    
+    try:
+        # Login se necessario
+        if not client.session.is_logged_in():
+            cert_path = os.getenv('BETFAIR_CERT_PATH')
+            key_path = os.getenv('BETFAIR_KEY_PATH')
+            
+            if cert_path and key_path:
+                success = client.session.login_certificate(cert_path, key_path)
+            else:
+                success = client.session.login_interactive()
+            
+            if not success:
+                st.error("❌ Login Betfair fallito")
+                return generate_mock_tennis_data()
+        
+        # Recupera dati tennis
+        tennis_odds = client.get_tennis_odds_realtime(
+            competition_filter=TENNIS_CONFIG['competition_filters'][:5]  # Limita per performance
+        )
+        
+        if not tennis_odds:
+            st.warning("Nessun dato tennis disponibile da Betfair")
+            return generate_mock_tennis_data()
+        
+        # Converte in formato compatibile con l'app
+        matches_data = []
+        for match in tennis_odds:
+            if len(match['runners']) >= 2:
+                player1 = match['runners'][0]
+                player2 = match['runners'][1]
+                
+                # Estrae migliori quote back
+                p1_back = player1['back_prices'][0]['price'] if player1['back_prices'] else 2.0
+                p2_back = player2['back_prices'][0]['price'] if player2['back_prices'] else 2.0
+                
+                # Calcola probabilità implicite
+                p1_prob = 1 / p1_back if p1_back > 1 else 0.5
+                p2_prob = 1 / p2_back if p2_back > 1 else 0.5
+                
+                matches_data.append({
+                    'match': match['event_name'],
+                    'tournament': match['competition'],
+                    'player1': player1['runner_name'],
+                    'player2': player2['runner_name'],
+                    'player1_odds': p1_back,
+                    'player2_odds': p2_back,
+                    'player1_prob': p1_prob,
+                    'player2_prob': p2_prob,
+                    'market_id': match['market_id'],
+                    'start_time': match['market_start_time'],
+                    'value_bet': abs(p1_prob - p2_prob) > 0.1  # Semplice calcolo value bet
+                })
+        
+        return pd.DataFrame(matches_data)
+        
+    except Exception as e:
+        st.error(f"Errore recupero dati Betfair: {e}")
+        return generate_mock_tennis_data()
+
+def generate_mock_tennis_data():
+    """Genera dati tennis simulati per modalità demo"""
+    np.random.seed(42)
+    
+    tournaments = ["ATP Masters 1000 Roma", "WTA 1000 Roma", "ATP 250 Firenze", "WTA 250 Palermo"]
+    players = [
+        "Jannik Sinner", "Matteo Berrettini", "Lorenzo Musetti", "Fabio Fognini",
+        "Jasmine Paolini", "Martina Trevisan", "Lucia Bronzetti", "Elisabetta Cocciaretto",
+        "Novak Djokovic", "Carlos Alcaraz", "Rafael Nadal", "Daniil Medvedev",
+        "Iga Swiatek", "Aryna Sabalenka", "Coco Gauff", "Jessica Pegula"
+    ]
+    
+    matches_data = []
+    for i in range(15):
+        p1, p2 = np.random.choice(players, 2, replace=False)
+        p1_odds = np.random.uniform(1.5, 4.0)
+        p2_odds = np.random.uniform(1.5, 4.0)
+        
+        matches_data.append({
+            'match': f"{p1} vs {p2}",
+            'tournament': np.random.choice(tournaments),
+            'player1': p1,
+            'player2': p2,
+            'player1_odds': round(p1_odds, 2),
+            'player2_odds': round(p2_odds, 2),
+            'player1_prob': round(1/p1_odds, 3),
+            'player2_prob': round(1/p2_odds, 3),
+            'market_id': f"mock_{i}",
+            'start_time': datetime.now().isoformat(),
+            'value_bet': np.random.choice([True, False], p=[0.3, 0.7])
+        })
+    
+    return pd.DataFrame(matches_data)
 
 # ⚙️ Configurazione pagina
 st.set_page_config(
@@ -175,39 +306,66 @@ else:
 st.divider()
 
 # -------------------------
-# 🎾 Partite di Oggi (card layout + filtri + grafico quote)
+# 🎾 Partite Tennis Betfair Italia (dati reali + value bets)
 # -------------------------
-st.subheader("📅 Partite Oggi")
+st.subheader("🎾 Tennis Live - Betfair Italia")
 
-matches = db.get_today_matches()
-if matches:
-    df_matches = pd.DataFrame(matches)
+# Inizializza client Betfair
+betfair_client = init_betfair_client()
 
-    # Probabilità stimate da Elo
-    def win_prob(elo1, elo2):
-        return 1 / (1 + 10 ** ((elo2 - elo1) / 400))
+# Pulsante refresh dati
+col1, col2, col3 = st.columns([1, 1, 2])
+with col1:
+    if st.button("🔄 Aggiorna Dati Betfair"):
+        st.cache_resource.clear()
+        st.rerun()
 
-    elo_map = {p["name"]: p["elo_rating"] for p in players}
-    df_matches["elo_p1"] = df_matches["player1_name"].map(elo_map)
-    df_matches["elo_p2"] = df_matches["player2_name"].map(elo_map)
+with col2:
+    demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
+    if demo_mode:
+        st.info("🔧 Modalità DEMO")
+    else:
+        st.success("🟢 Dati REALI")
 
-    # Gestione possibili NaN Elo
-    df_matches["elo_p1"] = df_matches["elo_p1"].fillna(df_players["elo_rating"].median() if players else 1800)
-    df_matches["elo_p2"] = df_matches["elo_p2"].fillna(df_players["elo_rating"].median() if players else 1800)
+# Recupera dati tennis
+with st.spinner("Caricamento dati tennis da Betfair Italia..."):
+    df_matches = get_tennis_data_betfair(betfair_client)
 
-    df_matches["prob_p1"] = df_matches.apply(lambda r: win_prob(r["elo_p1"], r["elo_p2"]), axis=1)
-    df_matches["prob_p2"] = 1 - df_matches["prob_p1"]
+if not df_matches.empty:
+    # Calcola fair odds basate su probabilità implicite Betfair
+    df_matches["fair_odds_p1"] = (1 / df_matches["player1_prob"]).round(2)
+    df_matches["fair_odds_p2"] = (1 / df_matches["player2_prob"]).round(2)
 
-    df_matches["fair_odds_p1"] = (1 / df_matches["prob_p1"]).round(2)
-    df_matches["fair_odds_p2"] = (1 / df_matches["prob_p2"]).round(2)
+    # Rinomina colonne per compatibilità con il resto dell'app
+    df_matches = df_matches.rename(columns={
+        'player1_odds': 'odds_p1',
+        'player2_odds': 'odds_p2',
+        'player1': 'player1_name',
+        'player2': 'player2_name',
+        'tournament': 'tournament_name'
+    })
 
-    # Value Bet check (solo se abbiamo odds reali)
-    df_matches["value_p1"] = (df_matches["odds_p1"].notna()) & (df_matches["odds_p1"] > df_matches["fair_odds_p1"])
-    df_matches["value_p2"] = (df_matches["odds_p2"].notna()) & (df_matches["odds_p2"] > df_matches["fair_odds_p2"])
+    # Aggiungi colonne mancanti per compatibilità
+    df_matches["surface"] = "Hard"  # Default, Betfair non fornisce superficie
+    df_matches["round"] = "Unknown"
+    df_matches["match_time"] = pd.to_datetime(df_matches["start_time"]).dt.strftime("%H:%M")
+
+    # Value Bet check basato su probabilità Betfair vs quote
+    df_matches["value_p1"] = df_matches["odds_p1"] > df_matches["fair_odds_p1"]
+    df_matches["value_p2"] = df_matches["odds_p2"] > df_matches["fair_odds_p2"]
 
     # Edge come scostamento percentuale vs fair odds
-    df_matches["edge_p1"] = ((df_matches["odds_p1"] / df_matches["fair_odds_p1"] - 1).fillna(0)).round(3)
-    df_matches["edge_p2"] = ((df_matches["odds_p2"] / df_matches["fair_odds_p2"] - 1).fillna(0)).round(3)
+    df_matches["edge_p1"] = ((df_matches["odds_p1"] / df_matches["fair_odds_p1"] - 1)).round(3)
+    df_matches["edge_p2"] = ((df_matches["odds_p2"] / df_matches["fair_odds_p2"] - 1)).round(3)
+
+    # Aggiungi Elo fittizi per compatibilità (se disponibili dal DB)
+    if players:
+        elo_map = {p["name"]: p["elo_rating"] for p in players}
+        df_matches["elo_p1"] = df_matches["player1_name"].map(elo_map).fillna(1800)
+        df_matches["elo_p2"] = df_matches["player2_name"].map(elo_map).fillna(1800)
+    else:
+        df_matches["elo_p1"] = 1800
+        df_matches["elo_p2"] = 1800
 
     # ---- Filtri partite (sidebar)
     st.sidebar.header("Filtri partite")
@@ -315,7 +473,122 @@ if matches:
             st.markdown("---")
 
 else:
-    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲' o 'Fetch dati reali 🌍'.")
+    st.info("Nessun dato tennis disponibile. Verifica la configurazione Betfair o attiva la modalità DEMO.")
+
+# -------------------------
+# 🎯 Sezione Betfair Italia - Informazioni e Configurazione
+# -------------------------
+st.divider()
+st.subheader("🇮🇹 Configurazione Betfair Italia")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("""
+    ### 📋 Requisiti per Betfair Italia
+    
+    **Per utilizzare dati reali da betfair.it:**
+    
+    1. **Account Betfair Italia** registrato su betfair.it
+    2. **App Key** creata nel developer portal
+    3. **Credenziali** o **Certificato SSL** per login
+    4. **Fondi** nell'account per piazzare scommesse
+    
+    **Regole mercato italiano:**
+    - Puntata minima: €2.00
+    - Incrementi: €0.50
+    - Vincita massima: €10,000 per scommessa
+    - Valuta: EUR
+    """)
+
+with col2:
+    st.markdown("""
+    ### ⚙️ Configurazione
+    
+    **File di configurazione:** `.env`
+    
+    ```bash
+    BETFAIR_APP_KEY=your_app_key_here
+    BETFAIR_USERNAME=your_username
+    BETFAIR_PASSWORD=your_password
+    DEMO_MODE=false
+    ```
+    
+    **Endpoint utilizzati:**
+    - Login: `identitysso.betfair.it`
+    - API: `api.betfair.com` (filtrato per Italia)
+    - Rate limit: 5 req/sec, 100 login/min
+    """)
+
+# Informazioni stato connessione
+if betfair_client:
+    if betfair_client.session.is_logged_in():
+        st.success("✅ Connesso a Betfair Italia")
+        
+        # Mostra informazioni account se disponibili
+        try:
+            funds = betfair_client.get_account_funds()
+            if funds:
+                st.info(f"💰 Saldo disponibile: €{funds.get('availableToBetBalance', 'N/A')}")
+        except:
+            pass
+    else:
+        st.warning("⚠️ Non connesso a Betfair Italia")
+else:
+    st.info("🔧 Modalità DEMO attiva - nessuna connessione reale")
+
+# Sezione piazzamento scommesse (solo se connesso e non in demo)
+if betfair_client and betfair_client.session.is_logged_in() and not df_matches.empty:
+    st.divider()
+    st.subheader("🎯 Piazza Scommessa (ATTENZIONE: USA FONDI REALI!)")
+    
+    st.warning("⚠️ **ATTENZIONE**: Questa funzione piazza scommesse reali con fondi veri!")
+    
+    # Selezione partita
+    match_options = [f"{row['player1_name']} vs {row['player2_name']}" for _, row in df_matches.iterrows()]
+    selected_match_idx = st.selectbox("Seleziona partita", range(len(match_options)), 
+                                     format_func=lambda x: match_options[x])
+    
+    if selected_match_idx is not None:
+        selected_match = df_matches.iloc[selected_match_idx]
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            bet_side = st.selectbox("Scommetti su", [
+                f"{selected_match['player1_name']} (€{selected_match['odds_p1']:.2f})",
+                f"{selected_match['player2_name']} (€{selected_match['odds_p2']:.2f})"
+            ])
+        
+        with col2:
+            bet_amount = st.number_input("Importo (€)", min_value=2.0, max_value=1000.0, 
+                                       value=10.0, step=0.5)
+        
+        with col3:
+            if st.button("🎯 PIAZZA SCOMMESSA", type="primary"):
+                try:
+                    # Determina selezione
+                    if selected_match['player1_name'] in bet_side:
+                        selection_id = 0  # Placeholder - dovrebbe essere il vero selection_id
+                        odds = selected_match['odds_p1']
+                    else:
+                        selection_id = 1  # Placeholder
+                        odds = selected_match['odds_p2']
+                    
+                    # Piazza scommessa (commentato per sicurezza)
+                    st.error("🚫 Funzione scommesse disabilitata per sicurezza. Implementare con cautela!")
+                    
+                    # result = betfair_client.place_bet(
+                    #     market_id=selected_match['market_id'],
+                    #     selection_id=selection_id,
+                    #     side='B',  # Back bet
+                    #     size=bet_amount,
+                    #     price=odds
+                    # )
+                    # st.success(f"✅ Scommessa piazzata: {result}")
+                    
+                except Exception as e:
+                    st.error(f"❌ Errore piazzamento scommessa: {e}")
 
 st.divider()
 
@@ -324,7 +597,8 @@ st.divider()
 # -------------------------
 st.subheader("💰 Info Progetto")
 st.markdown("""
-🎾 **Tennis Value Bets** - Dashboard con dati reali Sofascore  
-📊 Statistiche giocatori, quote bookmaker e detection value bets  
-🚀 Sviluppato con Streamlit + SQLite + Sofascore API  
+🎾 **Tennis Value Bets** - Dashboard con integrazione Betfair Italia  
+📊 Dati reali da betfair.it, analisi value bets e piazzamento scommesse  
+🇮🇹 Configurato specificamente per il mercato italiano  
+🚀 Sviluppato con Streamlit + Betfair Exchange API  
 """)

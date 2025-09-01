@@ -1,7 +1,5 @@
 import os
 import time
-import json
-import math
 import random
 import datetime as dt
 from typing import Dict, Any, Optional, Tuple, List
@@ -13,7 +11,6 @@ from db import DatabaseManager
 SOFA_BASE = "https://api.sofascore.com/api/v1"
 
 def _headers():
-    # User-Agent per ridurre blocchi
     ua = os.environ.get("SOFA_UA", "Mozilla/5.0 (compatible; TennisValueBets/1.0)")
     return {"User-Agent": ua, "Accept": "application/json"}
 
@@ -36,7 +33,6 @@ def _get(url: str, params: Optional[Dict[str, Any]] = None, max_retries: int = 3
         raise last_err
 
 def iso_date_utc_today() -> str:
-    # Sofa vuole yyyy-mm-dd in UTC
     return dt.datetime.utcnow().strftime("%Y-%m-%d")
 
 def fetch_scheduled_events(date_str: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -46,92 +42,116 @@ def fetch_scheduled_events(date_str: Optional[str] = None) -> List[Dict[str, Any
     data = _get(url)
     return data.get("events", [])
 
+def extract_players(ev: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """
+    Ritorna (p1_name, p2_name, p1_country, p2_country) cercando in vari layout:
+    - homeTeam/awayTeam
+    - homeCompetitor/awayCompetitor
+    - participants (con isHome True/False)
+    """
+    p1_name = p2_name = p1_country = p2_country = None
+
+    # 1) homeTeam / awayTeam
+    home = ev.get("homeTeam") or {}
+    away = ev.get("awayTeam") or {}
+    if not home and ev.get("homeCompetitor"):  # fallback
+        home = ev.get("homeCompetitor") or {}
+    if not away and ev.get("awayCompetitor"):
+        away = ev.get("awayCompetitor") or {}
+
+    def get_nm_cty(obj):
+        if not obj:
+            return None, None
+        name = obj.get("name") or obj.get("shortName")
+        cty = (obj.get("country") or {}).get("alpha2")
+        return name, cty
+
+    p1_name, p1_country = get_nm_cty(home)
+    p2_name, p2_country = get_nm_cty(away)
+
+    # 2) participants array (se non trovato sopra)
+    if (not p1_name or not p2_name) and isinstance(ev.get("participants"), list):
+        parts = ev["participants"]
+        home_part = next((x for x in parts if x.get("isHome")), None)
+        away_part = next((x for x in parts if x.get("isAway")), None)
+        if home_part:
+            p1_name = p1_name or home_part.get("name") or (home_part.get("team") or {}).get("name")
+            p1_country = p1_country or ((home_part.get("team") or {}).get("country") or {}).get("alpha2")
+        if away_part:
+            p2_name = p2_name or away_part.get("name") or (away_part.get("team") or {}).get("name")
+            p2_country = p2_country or ((away_part.get("team") or {}).get("country") or {}).get("alpha2")
+
+    return p1_name, p2_name, p1_country, p2_country
+
+def gender_from_tournament(cat: Dict[str, Any], tournament_name: str) -> Optional[str]:
+    name = (cat.get("name") or tournament_name or "").lower()
+    if "wta" in name or "women" in name or "ladies" in name:
+        return "F"
+    if "atp" in name or "men" in name:
+        return "M"
+    return None
+
 def fetch_event_odds_featured(event_id: int) -> Dict[str, Any]:
-    # Featured odds per vari bookmaker
-    # In alcuni casi l’endpoint è /odds/1/featured (market 1=match-winner)
-    url = f"{SOFA_BASE}/event/{event_id}/odds/1/featured"
-    try:
-        return _get(url)
-    except Exception:
-        # fallback: tutti i markets e poi filtriamo il market 1 (match winner)
-        url2 = f"{SOFA_BASE}/event/{event_id}/odds/markets"
-        return _get(url2)
+    # Proviamo featured, poi markets, poi all
+    for path in [f"/event/{event_id}/odds/1/featured",
+                 f"/event/{event_id}/odds/markets",
+                 f"/event/{event_id}/odds/1/all"]:
+        url = f"{SOFA_BASE}{path}"
+        try:
+            return _get(url)
+        except Exception:
+            continue
+    return {}
 
 def best_winner_odds(odds_payload: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
-    """
-    Ritorna (best_odds_p1, best_odds_p2, bookmaker_name) se disponibili.
-    Cerca market winner (id=1) o chiave 'featured'.
-    """
     best_p1 = None
     best_p2 = None
     best_bk = None
 
     def consider(odds_list: List[Dict[str, Any]], bk_name: str):
         nonlocal best_p1, best_p2, best_bk
-        # Tennis winner è binario, outcomes: { name or outcome: '1'/'2', 'home'/'away' }
-        # Strutture Sofa variano. Gestiamo alcuni formati comuni.
-        try:
-            o1, o2 = None, None
-            # Common patterns
-            for o in odds_list:
-                label = str(o.get("name") or o.get("choice") or o.get("outcome") or "").lower()
-                price = o.get("value") or o.get("decimalOdds") or o.get("odd")
-                # Alcuni payload usano "dp" o "num/den". Qui assumiamo decimali già pronti.
-                if not price:
-                    continue
-                try:
-                    price = float(price)
-                except:
-                    continue
-                if label in ("1", "home", "player1", "p1"):
-                    o1 = price
-                elif label in ("2", "away", "player2", "p2"):
-                    o2 = price
-            if o1:
-                if (best_p1 is None) or (o1 > best_p1):
-                    best_p1 = o1
-                    best_bk = bk_name
-            if o2:
-                if (best_p2 is None) or (o2 > best_p2):
-                    best_p2 = o2
-                    best_bk = bk_name
-        except:
-            pass
-
-    # Caso 1: featuredOdds
-    if "featuredOdds" in odds_payload:
-        fo = odds_payload["featuredOdds"]
-        if isinstance(fo, list):
-            for bk in fo:
-                bk_name = bk.get("bookmaker", {}).get("name") or bk.get("bookmakerName") or "book"
-                outcomes = bk.get("markets") or bk.get("odds") or []
-                if isinstance(outcomes, list):
-                    # Alcuni hanno markets con choices
-                    for m in outcomes:
-                        choices = m.get("choices") or m.get("outcomes") or []
-                        consider(choices, bk_name)
-    # Caso 2: markets
-    if "markets" in odds_payload:
-        for m in odds_payload.get("markets", []):
-            mid = m.get("id") or m.get("key")
-            if str(mid) != "1":
+        o1, o2 = None, None
+        for o in odds_list or []:
+            label = str(o.get("name") or o.get("choice") or o.get("outcome") or o.get("handicap") or "").lower()
+            price = o.get("value") or o.get("decimalOdds") or o.get("odd") or o.get("price")
+            if price is None:
                 continue
-            bk_odds = m.get("bookmakers") or []
-            for bk in bk_odds:
-                bk_name = bk.get("bookmaker", {}).get("name") or bk.get("name") or "book"
-                choices = bk.get("choices") or bk.get("outcomes") or []
+            try:
+                price = float(price)
+            except:
+                continue
+            if label in ("1", "home", "player1", "p1"):
+                o1 = price
+            elif label in ("2", "away", "player2", "p2"):
+                o2 = price
+        if o1 is not None and (best_p1 is None or o1 > best_p1):
+            best_p1 = o1
+            best_bk = bk_name
+        if o2 is not None and (best_p2 is None or o2 > best_p2):
+            best_p2 = o2
+            best_bk = bk_name
+
+    # featuredOdds
+    fo = odds_payload.get("featuredOdds")
+    if isinstance(fo, list):
+        for bk in fo:
+            bk_name = bk.get("bookmaker", {}).get("name") or bk.get("bookmakerName") or "book"
+            markets = bk.get("markets") or bk.get("odds") or []
+            for m in markets or []:
+                choices = m.get("choices") or m.get("outcomes") or []
                 consider(choices, bk_name)
 
-    return best_p1, best_p2, best_bk
+    # markets (id=1 winner)
+    for m in odds_payload.get("markets", []) or []:
+        mid = str(m.get("id") or m.get("key"))
+        if mid != "1":
+            continue
+        for bk in m.get("bookmakers") or []:
+            bk_name = bk.get("bookmaker", {}).get("name") or bk.get("name") or "book"
+            choices = bk.get("choices") or bk.get("outcomes") or []
+            consider(choices, bk_name)
 
-def gender_from_tournament(cat: Dict[str, Any]) -> Optional[str]:
-    # Prova a dedurre M/F da nome competizione
-    name = (cat.get("name") or "").lower()
-    if "wta" in name or "women" in name or "ladies" in name:
-        return "F"
-    if "atp" in name or "men" in name:
-        return "M"
-    return None
+    return best_p1, best_p2, best_bk
 
 def run_etl_today(verbose: bool = True) -> Dict[str, Any]:
     db = DatabaseManager()
@@ -141,65 +161,64 @@ def run_etl_today(verbose: bool = True) -> Dict[str, Any]:
     inserted = updated = skipped = 0
     matches_with_odds = 0
 
-    for ev in events:
+    for idx, ev in enumerate(events):
         try:
-            # Struttura tipica Sofa
             tournament = ev.get("tournament", {}) or {}
             category = tournament.get("category", {}) or {}
-            competition = {
-                "tournament_name": tournament.get("name") or "Tournament",
-                "surface": (ev.get("season", {}) or {}).get("surface") or ev.get("surface") or "Hard"
-            }
-            # Players
-            home = ev.get("homeTeam") or ev.get("homeCompetitor") or {}
-            away = ev.get("awayTeam") or ev.get("awayCompetitor") or {}
-            p1_name = home.get("name") or home.get("shortName")
-            p2_name = away.get("name") or away.get("shortName")
+            tournament_name = tournament.get("name") or "Tournament"
+
+            surface = (ev.get("season", {}) or {}).get("surface") or ev.get("surface") or "Hard"
+
+            p1_name, p2_name, p1_cty, p2_cty = extract_players(ev)
             if not p1_name or not p2_name:
                 skipped += 1
+                if verbose and idx < 3:
+                    print("Skip missing players:", {"id": ev.get("id"), "keys": list(ev.keys())[:12]})
                 continue
 
-            # Genere (dedotto)
-            gender = gender_from_tournament(category) or "M"
+            gender = gender_from_tournament(category, tournament_name) or "M"
 
-            # Time
             start_ts = ev.get("startTimestamp")
             match_time = None
             if start_ts:
                 match_time = dt.datetime.utcfromtimestamp(int(start_ts)).isoformat()
 
-            # Round
             round_name = (ev.get("roundInfo", {}) or {}).get("name") or ev.get("round") or "R32"
 
             # Upsert players
-            p1_id = db.upsert_player_by_name(name=p1_name, country=home.get("country", {}).get("alpha2") or "", gender=gender)
-            p2_id = db.upsert_player_by_name(name=p2_name, country=away.get("country", {}).get("alpha2") or "", gender=gender)
+            p1_id = db.upsert_player_by_name(name=p1_name, country=p1_cty or "", gender=gender)
+            p2_id = db.upsert_player_by_name(name=p2_name, country=p2_cty or "", gender=gender)
 
             # Upsert match base
+            mid_before = None
             match_id = db.upsert_match(
                 player1_id=p1_id,
                 player2_id=p2_id,
-                tournament_name=competition["tournament_name"],
+                tournament_name=tournament_name,
                 round=round_name,
-                surface=competition["surface"],
+                surface=surface,
                 match_time=match_time,
-                status=ev.get("status", {}).get("type", "not_started")
+                status=(ev.get("status") or {}).get("type") or "not_started",
             )
 
-            # Odds
-            odds_json = fetch_event_odds_featured(ev.get("id"))
-            o1, o2, bk = best_winner_odds(odds_json)
-            if o1 or o2:
-                matches_with_odds += 1
-            db.upsert_match_odds(match_id=match_id, odds_p1=o1, odds_p2=o2, source_book=bk or "sofa")
+            # Odds (non blocca ETL se fallisce)
+            try:
+                odds_json = fetch_event_odds_featured(ev.get("id"))
+                o1, o2, bk = best_winner_odds(odds_json)
+                if o1 is not None or o2 is not None:
+                    matches_with_odds += 1
+                db.upsert_match_odds(match_id=match_id, odds_p1=o1, odds_p2=o2, source_book=bk or "sofa")
+            except Exception:
+                pass
 
             updated += 1
-            if verbose and (updated % 20 == 0):
+            if verbose and (updated % 50 == 0):
                 print(f"Processed {updated} events...")
+
         except Exception as e:
-            if verbose:
-                print("Error on event:", e)
             skipped += 1
+            if verbose and idx < 5:
+                print("Error on event:", ev.get("id"), str(e)[:160])
             continue
 
     return {

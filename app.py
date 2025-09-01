@@ -23,21 +23,27 @@ logging.basicConfig(level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO')))
 @st.cache_resource
 def init_betfair_client():
     """Inizializza il client Betfair Italia con caching"""
-    app_key = os.getenv('BETFAIR_APP_KEY')
-    username = os.getenv('BETFAIR_USERNAME')
-    password = os.getenv('BETFAIR_PASSWORD')
-    demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
-    
-    if demo_mode or not app_key:
-        st.warning("⚠️ Modalità DEMO attiva - usando dati simulati")
-        return None
-    
     try:
+        st.info("🔄 Inizializzazione client Betfair...")
+        app_key = os.getenv('BETFAIR_APP_KEY')
+        username = os.getenv('BETFAIR_USERNAME')
+        password = os.getenv('BETFAIR_PASSWORD')
+        demo_mode = os.getenv('DEMO_MODE', 'true').lower() == 'true'
+        
+        st.info(f"📋 Demo mode: {demo_mode}, App key presente: {bool(app_key)}")
+        
+        if demo_mode or not app_key:
+            st.warning("⚠️ Modalità DEMO attiva - usando dati simulati")
+            return None
+        
+        st.info("🔗 Creazione sessione Betfair...")
         session = BetfairItalySession(app_key, username, password)
+        st.info("🔗 Creazione client Betfair...")
         client = BetfairItalyClient(session)
+        st.success("✅ Client Betfair inizializzato")
         return client
     except Exception as e:
-        st.error(f"Errore inizializzazione Betfair: {e}")
+        st.error(f"❌ Errore inizializzazione Betfair: {e}")
         return None
 
 def get_tennis_data_betfair(client):
@@ -146,80 +152,33 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 🎨 Tema custom con CSS (bianco+viola)
-st.markdown(
-    """
-    <style>
-    [data-testid="stSidebar"] {
-        background-color: #7B1FA2 !important;
-    }
-    [data-testid="stSidebar"] * {
-        color: white !important;
-    }
-    .stButton>button {
-        background-color: #7B1FA2;
-        color: white;
-        border-radius: 10px;
-        padding: 0.6em 1.2em;
-        font-weight: bold;
-        border: none;
-    }
-    .stButton>button:hover {
-        background-color: #9C27B0;
-        color: #fff;
-    }
-    h1, h2, h3, h4 {
-        color: #4A148C;
-        font-weight: 700;
-    }
-    .match-card {
-        background:#f6f6f6;
-        padding:10px;
-        border-radius:8px;
-        text-align:center;
-    }
-    .stDataFrame, .stPlotlyChart, .element-container {
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 1em;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-        margin-bottom: 1.5em;
-    }
-    .badge {
-        display:inline-block;
-        padding:2px 8px;
-        border-radius:12px;
-        font-size:12px;
-        font-weight:700;
-        color:#fff;
-        background:#2e7d32;
-        margin-left:6px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+# CSS rimosso temporaneamente per risolvere problemi di rendering
 
-# Inizializza DB
-db = DatabaseManager()
+# Inizializza DB - temporaneamente commentato per debug
+# db = DatabaseManager()
+db = None
 
 # 🎾 Titolo principale
 st.title("🎾 Tennis Value Bets Dashboard")
 st.markdown("**Analisi ATP/WTA con quote Betfair e detection value bets**")
+st.info("🚀 App caricata correttamente!")
 
 # 🔧 Sidebar azioni
 st.sidebar.header("🔧 Azioni")
 
-if st.sidebar.button("Popola DB giocatori 👥"):
-    db.populate_mock_data()
-    st.success("DB popolato con giocatori demo ✅")
+# Azioni DB temporaneamente commentate per debug
+st.sidebar.info("Azioni DB temporaneamente disabilitate per debug")
 
-if st.sidebar.button("Genera partite mock 🎲"):
-    try:
-        db.populate_mock_matches()
-        st.success("Partite mock generate ✅")
-    except Exception as e:
-        st.error(f"Errore nel generare partite mock: {e}")
+# if st.sidebar.button("Popola DB giocatori 👥"):
+#     db.populate_mock_data()
+#     st.success("DB popolato con giocatori demo ✅")
+
+# if st.sidebar.button("Genera partite mock 🎲"):
+#     try:
+#         db.populate_mock_matches()
+#         st.success("Partite mock generate ✅")
+#     except Exception as e:
+#         st.error(f"Errore nel generare partite mock: {e}")
 
 # Fetch dati reali (Sofascore)
 if st.sidebar.button("Fetch dati reali (Sofascore) 🌍"):
@@ -232,12 +191,14 @@ if st.sidebar.button("Fetch dati reali (Sofascore) 🌍"):
         st.error(f"Errore ETL Sofascore: {e}")
 
 # -------------------------
-# 👥 Filtri Giocatori
+# 👥 Filtri Giocatori - temporaneamente commentato per debug
 # -------------------------
 st.sidebar.header("Filtri giocatori")
+st.sidebar.info("Sezione giocatori temporaneamente disabilitata per debug")
 
-players = db.get_all_players_with_stats()
-if players:
+# players = db.get_all_players_with_stats()
+players = None
+if False:
     df_players = pd.DataFrame(players)
     df_players = df_players.sort_values("elo_rating", ascending=False)
 
@@ -310,8 +271,9 @@ st.divider()
 # -------------------------
 st.subheader("🎾 Tennis Live - Betfair Italia")
 
-# Inizializza client Betfair
-betfair_client = init_betfair_client()
+# Inizializza client Betfair - temporaneamente commentato per debug
+# betfair_client = init_betfair_client()
+betfair_client = None
 
 # Pulsante refresh dati
 col1, col2, col3 = st.columns([1, 1, 2])

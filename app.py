@@ -1,12 +1,13 @@
 import streamlit as st
-import pandas as pd
-import sqlite3
 import numpy as np
-from datetime import datetime
+import pandas as pd
 import plotly.express as px
+from datetime import datetime
+import os
+
 from db import DatabaseManager
 
-# Page config
+# ⚙️ Configurazione pagina
 st.set_page_config(
     page_title="Tennis Value Bets",
     page_icon="🎾",
@@ -14,167 +15,316 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize database
-@st.cache_resource
-def init_db():
-    return DatabaseManager()
-
-db = init_db()
-
-# Custom CSS
-st.markdown("""
-<style>
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #ff6b6b;
+# 🎨 Tema custom con CSS (bianco+viola)
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] {
+        background-color: #7B1FA2 !important;
     }
-    .value-bet {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 0.25rem;
-        padding: 0.75rem;
-        margin: 0.5rem 0;
+    [data-testid="stSidebar"] * {
+        color: white !important;
     }
-</style>
-""", unsafe_allow_html=True)
+    .stButton>button {
+        background-color: #7B1FA2;
+        color: white;
+        border-radius: 10px;
+        padding: 0.6em 1.2em;
+        font-weight: bold;
+        border: none;
+    }
+    .stButton>button:hover {
+        background-color: #9C27B0;
+        color: #fff;
+    }
+    h1, h2, h3, h4 {
+        color: #4A148C;
+        font-weight: 700;
+    }
+    .match-card {
+        background:#f6f6f6;
+        padding:10px;
+        border-radius:8px;
+        text-align:center;
+    }
+    .stDataFrame, .stPlotlyChart, .element-container {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 1em;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+        margin-bottom: 1.5em;
+    }
+    .badge {
+        display:inline-block;
+        padding:2px 8px;
+        border-radius:12px;
+        font-size:12px;
+        font-weight:700;
+        color:#fff;
+        background:#2e7d32;
+        margin-left:6px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-# Header
+# Inizializza DB
+db = DatabaseManager()
+
+# 🎾 Titolo principale
 st.title("🎾 Tennis Value Bets Dashboard")
 st.markdown("**Analisi ATP/WTA con quote Betfair e detection value bets**")
 
-# Sidebar
-st.sidebar.header("🔧 Filtri")
-show_value_only = st.sidebar.checkbox("Mostra solo Value Bets", False)
+# 🔧 Sidebar azioni
+st.sidebar.header("🔧 Azioni")
 
-# Refresh data
-if st.sidebar.button("🔄 Aggiorna Dati"):
-    st.cache_resource.clear()
-    st.rerun()
+if st.sidebar.button("Popola DB giocatori 👥"):
+    db.populate_mock_data()
+    st.success("DB popolato con giocatori demo ✅")
 
-# Main content tabs
-tab1, tab2, tab3 = st.tabs(["📅 Partite Oggi", "📊 Statistiche Giocatori", "💰 Info Progetto"])
+if st.sidebar.button("Genera partite mock 🎲"):
+    try:
+        db.populate_mock_matches()
+        st.success("Partite mock generate ✅")
+    except Exception as e:
+        st.error(f"Errore nel generare partite mock: {e}")
 
-with tab1:
-    st.header("Partite di Oggi")
-    
-    matches_today = db.get_today_matches()
-    
-    if matches_today:
-        match_data = []
-        
-        for m in matches_today:
-            # Ottieni gli ID partendo dai nomi
-            p1_id = db.get_player_by_name(m['player1_name'])
-            p2_id = db.get_player_by_name(m['player2_name'])
+# Fetch dati reali (Sofascore)
+if st.sidebar.button("Fetch dati reali (Sofascore) 🌍"):
+    try:
+        from etl_today import run_etl_today
+        with st.spinner("Scaricando dati reali da Sofascore..."):
+            summary = run_etl_today(verbose=False)
+        st.success(f"ETL ok: eventi={summary['events']} | aggiornati={summary['updated']} | con quote={summary['with_odds']} | skip={summary['skipped']}")
+    except Exception as e:
+        st.error(f"Errore ETL Sofascore: {e}")
 
-            p1_stats = db.get_player_stats(p1_id) if p1_id else None
-            p2_stats = db.get_player_stats(p2_id) if p2_id else None
-            
-            # Calcola probabilità basata su ELO
-            if p1_stats and p2_stats:
-                p1_elo = p1_stats.get('elo_rating', 1500)
-                p2_elo = p2_stats.get('elo_rating', 1500)
-                prob_p1 = 1 / (1 + 10 ** ((p2_elo - p1_elo) / 400))
-                prob_p2 = 1 - prob_p1
-            else:
-                prob_p1 = prob_p2 = 0.5
-            
-            # Recupera quote mercato (MATCH ODDS)
-            conn = db._connect()
-            cur = conn.execute("""
-                SELECT r.runner_name, p.back_price
-                FROM runners r
-                JOIN markets mkt ON r.market_id = mkt.id
-                JOIN prices p ON r.id = p.runner_id
-                WHERE mkt.match_id = ?
-                ORDER BY p.timestamp DESC
-                LIMIT 2
-            """, (m['id'],))
-            odds = cur.fetchall()
-            conn.close()
-            
-            if len(odds) == 2:
-                odds_p1 = odds[0][1]
-                odds_p2 = odds[1][1]
-            else:
-                odds_p1 = odds_p2 = None
-            
-            # Calcola EV (expected value)
-            ev_p1 = (prob_p1 * odds_p1 - 1) if odds_p1 else None
-            ev_p2 = (prob_p2 * odds_p2 - 1) if odds_p2 else None
-            
-            match_data.append({
-                "Ora": m['match_time'],
-                "Torneo": m['tournament_name'],
-                "Giocatore 1": m['player1_name'],
-                "Giocatore 2": m['player2_name'],
-                "Quota 1": odds_p1,
-                "Quota 2": odds_p2,
-                "Prob 1": round(prob_p1*100, 1),
-                "Prob 2": round(prob_p2*100, 1),
-                "EV 1": round(ev_p1*100, 1) if ev_p1 else None,
-                "EV 2": round(ev_p2*100, 1) if ev_p2 else None,
-            })
-        
-        st.dataframe(match_data, use_container_width=True)
+# -------------------------
+# 👥 Filtri Giocatori
+# -------------------------
+st.sidebar.header("Filtri giocatori")
+
+players = db.get_all_players_with_stats()
+if players:
+    df_players = pd.DataFrame(players)
+    df_players = df_players.sort_values("elo_rating", ascending=False)
+
+    nations = sorted(df_players["country"].dropna().unique())
+    selected_nations = st.sidebar.multiselect("🌍 Seleziona Paesi", nations, default=nations)
+
+    min_elo = int(df_players["elo_rating"].min())
+    max_elo = int(df_players["elo_rating"].max())
+    elo_min = st.sidebar.slider("📈 Elo minimo", min_elo, max_elo, min_elo)
+
+    min_rank = int(df_players["ranking"].min())
+    max_rank = int(df_players["ranking"].max())
+    rank_max = st.sidebar.slider("🏅 Ranking massimo", min_rank, max_rank, max_rank)
+
+    df_filtered = df_players[
+        (df_players["country"].isin(selected_nations)) &
+        (df_players["elo_rating"] >= elo_min) &
+        (df_players["ranking"] <= rank_max)
+    ]
+
+    st.subheader(f"📊 Giocatori trovati: {len(df_filtered)}")
+
+    if not df_filtered.empty:
+        st.dataframe(df_filtered[["name", "country", "elo_rating", "ranking", "wins", "losses"]].head(15))
+
+        top10 = df_filtered.head(10)
+        fig = px.bar(
+            top10,
+            x="name",
+            y="elo_rating",
+            color="country",
+            title="🏆 Top 10 Giocatori per Elo Rating (filtrati)",
+            text="elo_rating"
+        )
+        fig.update_traces(texttemplate='%{text:.0f}', textposition="outside")
+        fig.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 👤 Scheda giocatore
+        player_names = df_filtered["name"].tolist()
+        selected_player = st.selectbox("👤 Vedi scheda giocatore", ["—"] + player_names)
+
+        if selected_player != "—":
+            player_data = df_filtered[df_filtered["name"] == selected_player].iloc[0]
+            st.markdown(f"### 👤 {player_data['name']} ({player_data['country']})")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Elo Rating", f"{player_data['elo_rating']}")
+                st.metric("Ranking", f"{player_data['ranking']}")
+            with col2:
+                st.metric("Vittorie", f"{player_data['wins']}")
+                st.metric("Sconfitte", f"{player_data['losses']}")
+
+            fig_trend = px.line(
+                x=list(range(10)),
+                y=np.random.randint(1600, 2000, 10),
+                title=f"Andamento Elo di {player_data['name']}"
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
+
     else:
-        st.warning("Nessuna partita trovata per oggi.")
+        st.warning("⚠️ Nessun giocatore trovato con i filtri attuali.")
+else:
+    st.info("ℹ️ Nessun giocatore presente nel database. Popola il DB dal menu a sinistra.")
 
-with tab3:
-    st.header("💰 Info Progetto")
-    
-    st.markdown("""
-    ### 🎾 Tennis Value Bets Dashboard
-    
-    Questa è una **demo funzionante** del progetto completo per l'analisi di value bets nel tennis.
-    
-    #### ✅ Cosa funziona già:
-    - **Database SQLite** popolato con giocatori ATP/WTA reali
-    - **Sistema ELO** per rating giocatori
-    - **Partite mock** generate per oggi
-    - **Dashboard interattiva** con filtri e grafici
-    - **Struttura completa** pronta per integrazioni API
-    
-    #### 🚀 Prossimi passi per la versione completa:
-    1. **Integrazione Betfair API** (credenziali in `.env`)
-    2. **ETL automatico** per import partite reali
-    3. **Modelli ML** avanzati per predizioni
-    4. **Deploy su Streamlit Cloud** o Heroku
-    
-    #### 📁 File del progetto:
-    - `app.py` - Questa dashboard Streamlit
-    - `db.py` - Gestione database SQLite
-    - `bootstrap.py` - Script di setup iniziale
-    - `data/tennis.db` - Database con dati mock
-    
-    #### 🔧 Comandi utili:
-    ```bash
-    # Avvia l'app
-    streamlit run app.py
-    
-    # Rigenera dati mock
-    python3 bootstrap.py
-    ```
-    """)
-    
-    # Database stats
-    st.subheader("📊 Statistiche Database")
-    
-    with sqlite3.connect("data/tennis.db") as conn:
-        players_count = conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
-        matches_count = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
-        tournaments_count = conn.execute("SELECT COUNT(*) FROM tournaments").fetchone()[0]
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Giocatori", players_count)
-    with col2:
-        st.metric("Partite", matches_count)
-    with col3:
-        st.metric("Tornei", tournaments_count)
+st.divider()
 
-# Footer
-st.markdown("---")
-st.markdown("🎾 **Tennis Value Bets** - Demo Dashboard con dati mock")
+# -------------------------
+# 🎾 Partite di Oggi (card layout + filtri + grafico quote)
+# -------------------------
+st.subheader("📅 Partite Oggi")
+
+matches = db.get_today_matches()
+if matches:
+    df_matches = pd.DataFrame(matches)
+
+    # Probabilità stimate da Elo
+    def win_prob(elo1, elo2):
+        return 1 / (1 + 10 ** ((elo2 - elo1) / 400))
+
+    elo_map = {p["name"]: p["elo_rating"] for p in players}
+    df_matches["elo_p1"] = df_matches["player1_name"].map(elo_map)
+    df_matches["elo_p2"] = df_matches["player2_name"].map(elo_map)
+
+    # Gestione possibili NaN Elo
+    df_matches["elo_p1"] = df_matches["elo_p1"].fillna(df_players["elo_rating"].median() if players else 1800)
+    df_matches["elo_p2"] = df_matches["elo_p2"].fillna(df_players["elo_rating"].median() if players else 1800)
+
+    df_matches["prob_p1"] = df_matches.apply(lambda r: win_prob(r["elo_p1"], r["elo_p2"]), axis=1)
+    df_matches["prob_p2"] = 1 - df_matches["prob_p1"]
+
+    df_matches["fair_odds_p1"] = (1 / df_matches["prob_p1"]).round(2)
+    df_matches["fair_odds_p2"] = (1 / df_matches["prob_p2"]).round(2)
+
+    # Value Bet check (solo se abbiamo odds reali)
+    df_matches["value_p1"] = (df_matches["odds_p1"].notna()) & (df_matches["odds_p1"] > df_matches["fair_odds_p1"])
+    df_matches["value_p2"] = (df_matches["odds_p2"].notna()) & (df_matches["odds_p2"] > df_matches["fair_odds_p2"])
+
+    # Edge come scostamento percentuale vs fair odds
+    df_matches["edge_p1"] = ((df_matches["odds_p1"] / df_matches["fair_odds_p1"] - 1).fillna(0)).round(3)
+    df_matches["edge_p2"] = ((df_matches["odds_p2"] / df_matches["fair_odds_p2"] - 1).fillna(0)).round(3)
+
+    # ---- Filtri partite (sidebar)
+    st.sidebar.header("Filtri partite")
+
+    tournaments = sorted(df_matches["tournament_name"].dropna().unique().tolist())
+    selected_tournaments = st.sidebar.multiselect("🏟️ Tornei", tournaments, default=tournaments)
+
+    surfaces = sorted(df_matches["surface"].dropna().unique().tolist())
+    selected_surfaces = st.sidebar.multiselect("🟦 Superfici", surfaces, default=surfaces)
+
+    only_value = st.sidebar.checkbox("🔥 Solo Value Bets", value=False)
+    min_edge = st.sidebar.slider("📊 Edge minimo (%)", 0, 50, 5)  # percento
+    min_edge_dec = min_edge / 100.0
+
+    # Applica filtri
+    dfm = df_matches[
+        (df_matches["tournament_name"].isin(selected_tournaments)) &
+        (df_matches["surface"].isin(selected_surfaces))
+    ].copy()
+
+    if only_value:
+        dfm = dfm[(dfm["value_p1"]) | (dfm["value_p2"])]
+
+    # Edge soglia su almeno uno dei due lati
+    dfm = dfm[(dfm["edge_p1"] >= min_edge_dec) | (dfm["edge_p2"] >= min_edge_dec)]
+
+    st.caption(f"Partite dopo filtri: {len(dfm)}")
+
+    # Download CSV value bets
+    vb = dfm[
+        (dfm["edge_p1"] >= min_edge_dec) | (dfm["edge_p2"] >= min_edge_dec)
+    ][[
+        "tournament_name","round","surface",
+        "player1_name","odds_p1","fair_odds_p1","edge_p1",
+        "player2_name","odds_p2","fair_odds_p2","edge_p2",
+        "match_time"
+    ]].copy()
+    if not vb.empty:
+        vb_sorted = vb.sort_values(by=["edge_p1","edge_p2"], ascending=False)
+        csv = vb_sorted.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Scarica Value Bets (CSV)", data=csv, file_name="value_bets.csv", mime="text/csv")
+
+    # Render card + grafico per ciascun match
+    if dfm.empty:
+        st.info("Nessuna partita soddisfa i filtri attuali.")
+    else:
+        for _, row in dfm.iterrows():
+            col1, col2, col3 = st.columns([4, 2, 4])
+
+            with col1:
+                badge_html = '<span class="badge">VALUE</span>' if row["value_p1"] and row["edge_p1"] >= min_edge_dec else ""
+                odds_p1_display = f"{row['odds_p1']:.2f}" if pd.notna(row['odds_p1']) else "N/A"
+                st.markdown(f"""
+                <div class="match-card">
+                    <b>{row['player1_name']}</b> {badge_html}<br>
+                    Elo: {int(row['elo_p1'])}<br>
+                    Odds: <span style="color:{'green' if row['value_p1'] and row['edge_p1'] >= min_edge_dec else 'black'}">{odds_p1_display}</span><br>
+                    Fair: {row['fair_odds_p1']}<br>
+                    Edge: {(row['edge_p1']*100):.1f}%
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col2:
+                when = ""
+                try:
+                    when = pd.to_datetime(row["match_time"]).strftime("%H:%M")
+                except Exception:
+                    when = str(row["match_time"]) if pd.notna(row["match_time"]) else "TBD"
+                st.markdown(f"""
+                <div style="text-align:center; font-size:22px;">
+                    <b>VS</b><br>
+                    <span style="font-size:14px;">{row['tournament_name']} - {row['round']} ({row['surface']})</span><br>
+                    <span style="font-size:12px;">{when}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col3:
+                badge_html2 = '<span class="badge">VALUE</span>' if row["value_p2"] and row["edge_p2"] >= min_edge_dec else ""
+                odds_p2_display = f"{row['odds_p2']:.2f}" if pd.notna(row['odds_p2']) else "N/A"
+                st.markdown(f"""
+                <div class="match-card">
+                    <b>{row['player2_name']}</b> {badge_html2}<br>
+                    Elo: {int(row['elo_p2'])}<br>
+                    Odds: <span style="color:{'green' if row['value_p2'] and row['edge_p2'] >= min_edge_dec else 'black'}">{odds_p2_display}</span><br>
+                    Fair: {row['fair_odds_p2']}<br>
+                    Edge: {(row['edge_p2']*100):.1f}%
+                </div>
+                """, unsafe_allow_html=True)
+
+            # 🔹 Grafico quote vs fair (solo se abbiamo almeno una quota reale)
+            if pd.notna(row['odds_p1']) or pd.notna(row['odds_p2']):
+                o1 = row['odds_p1'] if pd.notna(row['odds_p1']) else 0
+                o2 = row['odds_p2'] if pd.notna(row['odds_p2']) else 0
+                fig_match = px.bar(
+                    x=["Odds P1", "Fair P1", "Odds P2", "Fair P2"],
+                    y=[o1, row['fair_odds_p1'], o2, row['fair_odds_p2']],
+                    color=["Real", "Fair", "Real", "Fair"],
+                    title=f"Confronto Quote - {row['player1_name']} vs {row['player2_name']}",
+                    text=[o1, row['fair_odds_p1'], o2, row['fair_odds_p2']]
+                )
+                fig_match.update_traces(texttemplate='%{text:.2f}', textposition="outside")
+                fig_match.update_layout(yaxis_title="Quota", xaxis_title="", showlegend=False, height=380)
+                st.plotly_chart(fig_match, use_container_width=True)
+
+            st.markdown("---")
+
+else:
+    st.info("Nessuna partita trovata per oggi. Usa 'Genera partite mock 🎲' o 'Fetch dati reali 🌍'.")
+
+st.divider()
+
+# -------------------------
+# ℹ️ Info progetto
+# -------------------------
+st.subheader("💰 Info Progetto")
+st.markdown("""
+🎾 **Tennis Value Bets** - Dashboard con dati reali Sofascore  
+📊 Statistiche giocatori, quote bookmaker e detection value bets  
+🚀 Sviluppato con Streamlit + SQLite + Sofascore API  
+""")

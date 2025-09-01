@@ -155,7 +155,7 @@ else:
 st.divider()
 
 # -------------------------
-# 🎾 Partite di Oggi (card layout con Value Bets)
+# 🎾 Partite di Oggi (card layout + grafico quote)
 # -------------------------
 st.subheader("📅 Partite Oggi")
 
@@ -209,6 +209,18 @@ if matches:
                 Fair: {row['fair_odds_p2']}
             </div>
             """, unsafe_allow_html=True)
+
+        # 🔹 Grafico quote vs fair
+        fig_match = px.bar(
+            x=["Odds P1", "Fair P1", "Odds P2", "Fair P2"],
+            y=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']],
+            color=["Real", "Fair", "Real", "Fair"],
+            title=f"Confronto Quote - {row['player1_name']} vs {row['player2_name']}",
+            text=[row['odds_p1'], row['fair_odds_p1'], row['odds_p2'], row['fair_odds_p2']]
+        )
+        fig_match.update_traces(texttemplate='%{text:.2f}', textposition="outside")
+        fig_match.update_layout(yaxis_title="Quota", xaxis_title="", showlegend=False, height=400)
+        st.plotly_chart(fig_match, use_container_width=True)
 
         st.markdown("---")
 
